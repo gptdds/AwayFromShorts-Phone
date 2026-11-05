@@ -2,7 +2,7 @@
 
 > 到点把短视频 App **真的锁住** —— 不是弹个提醒,是点不开。
 
-Windows 那套(hosts 屏蔽网站 + 杀进程 + 网页面板)在 **[AwayFromShorts](https://github.com/sdgfdii/AwayFromShorts)**,
+Windows 那套(hosts 屏蔽网站 + 杀进程 + 网页面板)在 **[AwayFromShorts](https://github.com/gptdds/AwayFromShorts)**,
 是独立的另一个仓库。这里只有安卓。
 
 ---
