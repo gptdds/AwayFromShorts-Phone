@@ -1,5 +1,6 @@
 # AwayFromShorts · Android 端 📱
 
+国内国外为了掌控人的注意力把信息流塞满软件的每个角落，系统也不会为了人们的自制力而改变，因此只能暂时地靠自己掌握自己，有了ai编程就创造这个软件。等到将来为了人的发展需要全面地改造系统和软件。
 > 到点把短视频 App **真的锁住** —— 不是弹个提醒,是点不开。
 
 Windows 那套(hosts 屏蔽网站 + 杀进程 + 网页面板)在 **[AwayFromShorts](https://github.com/gptdds/AwayFromShorts)**,
