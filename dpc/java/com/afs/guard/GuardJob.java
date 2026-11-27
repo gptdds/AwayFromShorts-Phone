@@ -8,6 +8,10 @@ public class GuardJob extends JobService {
 
     @Override
     public boolean onStartJob(JobParameters params) {
+        if (!MasterSwitch.enabled(this)) {
+            Guard.cancelSchedules(this);
+            return false;
+        }
         Guard.ensureService(this);   // 进程被「最近任务」划掉后，持久化 Job 是最后的复活点
         Guard.applyAsync(this);      // 主线程只排下一次，重活交给后台策略线程
         Guard.schedule(this);

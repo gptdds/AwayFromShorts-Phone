@@ -135,6 +135,13 @@ public class AppListActivity extends ThemedActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         if (!getIntent().getBooleanExtra("legacy", false)) {
+            if (!com.afs.guard.plugins.DockPages.isEnabled(this,
+                    com.afs.guard.plugins.DockPages.FREEZE)) {
+                BackToHome.open(this);
+                finish();
+                overridePendingTransition(0, 0);
+                return;
+            }
             startActivity(new Intent(this, FreezeBoardActivity.class));
             finish();
             overridePendingTransition(0, 0);

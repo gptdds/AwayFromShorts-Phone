@@ -8,6 +8,10 @@ public final class MemoTextFormatTest {
         eq("# abc",MemoTextFormat.heading("abc",0,0,1).body,"heading");
         eq("### abc",MemoTextFormat.heading("## abc",2,2,3).body,"replace heading");
         eq("abc",MemoTextFormat.heading("# abc",0,0,0).body,"normal paragraph");
+        eq("one",MemoTextFormat.heading("1. one",0,6,0).body,"normal paragraph removes ordered marker");
+        eq("one",MemoTextFormat.heading("- one",0,5,0).body,"normal paragraph removes bullet");
+        eq("one\n- [x] done\ntwo",MemoTextFormat.heading("1. one\n- [x] done\n2. two",0,99,0).body,"normal paragraph keeps task state");
+        eq("# one",MemoTextFormat.heading("> 1. one",0,8,1).body,"heading removes stacked paragraph markers");
         eq("## one\ntwo",MemoTextFormat.heading("one\ntwo",0,4,2).body,"terminal newline excludes next paragraph");
         eq("  ## one\r\n## two",MemoTextFormat.heading("  one\r\ntwo",0,99,2).body,"CRLF and indentation retained");
         eq("- [x] done",MemoTextFormat.heading("- [x] done",0,99,1).body,"heading does not destroy checked task");
@@ -38,6 +42,16 @@ public final class MemoTextFormatTest {
         eq(full.toString(),MemoTextFormat.heading(full.toString(),0,0,1).body,"capacity protection");
         eq("<u>中文</u>",MemoTextFormat.previewExtras("&lt;u&gt;中文&lt;/u&gt;"),"safe underline preview");
         check(MemoTextFormat.previewExtras("&lt;script&gt;x&lt;/script&gt;").contains("&lt;script&gt;"),"arbitrary HTML remains escaped");
+        String blocks=MemoTextFormat.previewExtras("#### H4\n##### H5\n###### H6\n> quote one\n> quote two\nplain\n---\n***\n1. one\n2. two\n```\n#### not a heading\n> not a quote\n1. not a list\n```");
+        check(blocks.contains("<big><b><font color='#000000'>H4</font>"),"h4 preview is promoted");
+        check(blocks.contains("<big><b><font color='#000000'>H5</font>"),"h5 preview is promoted");
+        check(blocks.contains("<big><b><font color='#000000'>H6</font>"),"h6 preview is promoted");
+        check(blocks.contains("<i><font color='#8A8F98'>quote one</font></i>"),"first quote line is styled");
+        check(blocks.contains("<i><font color='#8A8F98'>quote two</font></i>"),"second quote line is styled");
+        check(blocks.contains("─────"),"horizontal rule preview");
+        check(blocks.contains("1. one")&&blocks.contains("2. two"),"ordered list numbers are retained");
+        check(blocks.contains("#### not a heading")&&blocks.contains("> not a quote")&&blocks.contains("1. not a list"),"fenced code remains literal");
+        check(MemoTextFormat.previewExtras("&gt; &lt;script&gt;x&lt;/script&gt;").contains("&lt;script&gt;"),"quote preview keeps HTML escaped");
         check(MemoTextFormat.previewExtras("==中文==").contains("background-color"),"highlight preview");
         check(MemoTextFormat.previewExtras("&lt;u onclick=x&gt;x&lt;/u&gt;").contains("onclick=x&gt;"),"underline attributes never enabled");
         eq("```\n==example==\n```",MemoTextFormat.previewExtras("```\n==example==\n```"),"preview leaves fenced examples untouched");
@@ -58,6 +72,24 @@ public final class MemoTextFormatTest {
         check(MemoTextFormat.continueList("- [ ] task\n",10)==null,"task line is not auto-numbered");
         check(MemoTextFormat.continueList("```\n1. code\n",11)==null,"fenced code never continued");
         eq("\none",MemoTextFormat.continueList("1.\none",2).body,"bare marker counts as empty item");
+        String numbered="1. one\n2. two\n3. three";
+        int middle=numbered.indexOf("2. two");
+        String middleDeleted=numbered.substring(0,middle)+numbered.substring(middle+"2. two\n".length());
+        MemoTextFormat.Change repaired=MemoTextFormat.renumberAfterDeletion(numbered,middleDeleted,middle,"2. two\n".length(),middle);
+        eq("1. one\n2. three",repaired.body,"deleting a middle item renumbers the remainder");
+        eq("7",String.valueOf(repaired.cursor),"renumber keeps the caret at the deletion point");
+        String firstDeleted=numbered.substring(numbered.indexOf('\n')+1);
+        eq("1. two\n2. three",MemoTextFormat.renumberAfterDeletion(numbered,firstDeleted,0,"1. one\n".length(),0).body,"deleting the first item restarts numbering");
+        String nested="1. parent\n  1. child\n2. middle\n3. last\n```\n9. code\n```";
+        int nestedDelete=nested.indexOf("2. middle");
+        String nestedAfter=nested.substring(0,nestedDelete)+nested.substring(nestedDelete+"2. middle\n".length());
+        eq("1. parent\n  1. child\n2. last\n```\n9. code\n```",
+                MemoTextFormat.renumberAfterDeletion(nested,nestedAfter,nestedDelete,"2. middle\n".length(),nestedDelete).body,
+                "nested items keep a numbering stack and fenced code stays literal");
+        String rollover="9. nine\n10. ten\n11. eleven";
+        String rolloverAfter=rollover.substring("9. nine\n".length());
+        eq("1. ten\n2. eleven",MemoTextFormat.renumberAfterDeletion(rollover,rolloverAfter,0,"9. nine\n".length(),0).body,"two digit markers normalize to one digit");
+        check(MemoTextFormat.renumberAfterDeletion("plain text","lain text",1,1,0)==null,"plain text deletion does not rewrite numbering");
         eq("> note",MemoTextFormat.quote("note",0,4).body,"quote selected paragraph");
         eq("note",MemoTextFormat.quote("> note",0,6).body,"quote toggles off");
         eq("note",MemoTextFormat.heading("> note",0,6,0).body,"body removes quote");

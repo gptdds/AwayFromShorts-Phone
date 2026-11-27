@@ -15,6 +15,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.Calendar;
+import java.util.Set;
 
 /**
  * 主界面：只看状态，不进列表。
@@ -35,17 +36,32 @@ import java.util.Calendar;
  */
 public class MainActivity extends ThemedActivity {
 
-    private static volatile boolean homeVisible;
+    /**
+     * 打卡页是否在前台。打卡页接管桌面入口后，GrayMode 的判定跟着它走：
+     * 页面可见时不用把整台手机压成灰色，用户正在看的就是打卡页本身。
+     */
+    /** 打卡页和首页都能声明「学习台在前台」；两页切换不因 onPause 顺序误判。 */
+    private static final Set<Object> homeOwners =
+            java.util.Collections.newSetFromMap(new java.util.WeakHashMap<Object, Boolean>());
 
-    public static boolean isHomeVisible() {
-        return homeVisible;
+    public static synchronized void enterHome(Object owner) {
+        homeOwners.add(owner);
+    }
+
+    public static synchronized void leaveHome(Object owner) {
+        homeOwners.remove(owner);
+    }
+
+    public static synchronized boolean isHomeVisible() {
+        return !homeOwners.isEmpty();
     }
 
     private Ui ui;
+    private ToolShelf toolShelf;
 
     private ScrollView scroll;
     private TextView statusText;
-    private MainDisplayCount.Counter displayCounter=Guard::blockedCount;
+    private MainDisplayCount.Counter displayCounter=Guard::suspendedCount;
     private long displayGeneration,displaySequence,displayPublished;
     private boolean displayActive,displayCountFailed,statusOwner;
     private Integer displayBlockedCount;
@@ -58,13 +74,13 @@ public class MainActivity extends ThemedActivity {
     private void updateStatusText(){
         if(statusText==null)return;
         String count=displayBlockedCount==null?(displayCountFailed?T.s("统计失败，稍后重试"):T.s("统计中")):displayBlockedCount+T.s(" 个")+(displayCountFailed?T.s("（更新失败）"):"");
-        statusText.setText(T.s("应用 ")+statusTotal+T.s(" 个 · 冻结 ")+count+T.s("\n关键应用 ")+statusKeys+T.s(" 个 · ")+(statusOwner?T.s("加固已开启"):T.s("未取得设备所有者权限"))+T.s("\n下次切换 ")+nextSwitchText);
+        statusText.setText(T.s("应用 ")+statusTotal+T.s(" 个 · 实际冻结 ")+count+T.s("\n关键应用 ")+statusKeys+T.s(" 个 · ")+(statusOwner?T.s("设备管理已启用"):T.s("未取得设备所有者权限"))+T.s("\n计划切换 ")+nextSwitchText+T.s("\n学习和额度要求仍按各自规则执行"));
         statusText.setTextColor(statusOwner?ui.text2():ui.red());
     }
     private void stopDisplayCount(){displayActive=false;displayGeneration++;MainDisplayCount.cancel(this);}
     @Override protected void onDestroy(){stopDisplayCount();super.onDestroy();}
     private TextView statusChip;
-    private long nextSwitchMinute = -1L;
+    private long nextSwitchSecond = -1L;
     private String nextSwitchText = "—";
     private TextView lockNote;
     private TextView checkinTitle;
@@ -91,6 +107,14 @@ public class MainActivity extends ThemedActivity {
         }
     };
 
+    /** 在守卫主页按返回：任何底栏页都先回打卡主页，再由打卡页退出到桌面。 */
+    @Override
+    public void onBackPressed() {
+        if (toolShelf != null && toolShelf.close()) return;
+        if (BackToHome.open(this)) return;
+        super.onBackPressed();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -110,6 +134,7 @@ public class MainActivity extends ThemedActivity {
 
         scroll = new ScrollView(this);
         ui.page(scroll);
+        StyleSurface.apply(scroll, ui, com.afs.guard.style.StyleManager.selected(this));
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -121,7 +146,7 @@ public class MainActivity extends ThemedActivity {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        bar.addView(ui.title(T.s("守卫")), new LinearLayout.LayoutParams(0,-2,1f));
 
         View settingsBtn = ui.amap?new AmapStyle.Icon(this,T.s("设置"),ui.text()):ui.settingsButton(ui.text2(), ui.surface());
         if(ui.amap){settingsBtn.setLayoutParams(new LinearLayout.LayoutParams(ui.dp(34),ui.dp(34)));settingsBtn.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);}
@@ -136,6 +161,14 @@ public class MainActivity extends ThemedActivity {
         LinearLayout.LayoutParams scLp = ui.gap(16);
         scLp.topMargin = ui.dp(16);
         root.addView(statusCard, scLp);
+        if(!"paper".equals(ui.style())){
+            if(!StyleMood.fluid(ui.style())){statusCard.setBackground(null);statusCard.setTag(R.id.visual_card,null);}
+            statusCard.setPadding(ui.dp(4),ui.dp(8),ui.dp(4),ui.dp(18));
+            LinearLayout hero=new LinearLayout(this);hero.setGravity(Gravity.CENTER_VERTICAL);
+            TextView heading=ui.title(T.s("专注的时间，\n留给自己。"));heading.setTextSize(StyleMood.spatial(ui.style())?30:27);
+            hero.addView(heading,new LinearLayout.LayoutParams(0,-2,1f));hero.addView(new GuardArtwork(this),new LinearLayout.LayoutParams(ui.dp(116),ui.dp(143)));
+            statusCard.addView(hero,new LinearLayout.LayoutParams(-1,-2));
+        }
 
         LinearLayout statusHead = new LinearLayout(this);
         statusHead.setOrientation(LinearLayout.HORIZONTAL);
@@ -144,9 +177,8 @@ public class MainActivity extends ThemedActivity {
         TextView dot = new TextView(this);
         dot.setText("◉");
         dot.setTextSize(10);
-        dot.setTextColor(ui.accent());
+        dot.setTextColor(ui.text2());
         dot.setGravity(Gravity.CENTER);
-        dot.setBackground(ui.round(ui.dark ? 0xFF1B2740 : 0xFFE7EEFC, 8f));
         statusHead.addView(dot, new LinearLayout.LayoutParams(ui.dp(26), ui.dp(26)));
 
         TextView st = new TextView(this);
@@ -157,7 +189,7 @@ public class MainActivity extends ThemedActivity {
         SwissTypography.role(st,SwissTypography.Role.SECTION);
         LinearLayout.LayoutParams stLp = new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        stLp.leftMargin = ui.dp(9);
+        stLp.leftMargin = ui.dp(8);
         statusHead.addView(st, stLp);
 
         statusChip = ui.chip("—", ui.text(), ui.surface2());
@@ -168,7 +200,7 @@ public class MainActivity extends ThemedActivity {
         statusText.setTextSize(13);
         statusText.setTextColor(ui.text2());
         statusText.setLineSpacing(ui.dp(5), 1f);
-        statusText.setMaxLines(3);
+        statusText.setMaxLines(6);
         LinearLayout.LayoutParams stlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         stlp.topMargin = ui.dp(10);
@@ -189,65 +221,17 @@ public class MainActivity extends ThemedActivity {
             }
         });
 
-        /* ---------- 快捷：三格彩色图标 ---------- */
-        LinearLayout sec = ui.section("▦", ui.accent(), T.s("功能"), null, null);
+        /* ---------- 工具区快捷入口 ---------- */
+        LinearLayout sec = ui.section("▦", ui.accent(), T.s("工具区"), null, null);
         LinearLayout.LayoutParams seclp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         seclp.topMargin = ui.dp(24);
         seclp.bottomMargin = ui.dp(12);
         root.addView(sec, seclp);
 
-        // 四格排成 2×2：三格挤一行时 hint 会被截断，两行两列每个都读得全
-        LinearLayout firstRow = new LinearLayout(this);
-        firstRow.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout secondRow = new LinearLayout(this);
-        secondRow.setOrientation(LinearLayout.HORIZONTAL);
-
-        LinearLayout tManage = ui.tile("◎", Ui.TILE_TEAL, T.s("卡管理"), T.s("卡片 · 奖励 · 周期"),
-                new View.OnClickListener() {
-                    public void onClick(View v) {
-                        startActivity(new Intent(MainActivity.this, CardManagementActivity.class));
-                    }
-                });
-        LinearLayout tHist = ui.tile("▤", Ui.TILE_PURPLE, T.s("打卡历史"), T.s("连续天数 · 统计"),
-                new View.OnClickListener() {
-                    public void onClick(View v) {
-                        startActivity(new Intent(MainActivity.this, HistoryActivity.class));
-                    }
-                });
-        // 备忘录是纯本机的速记，不参与冻结/打卡，所以只给一个入口，不占底栏
-        LinearLayout tMemo = ui.tile("✎", Ui.TILE_RUST, T.s("备忘录"), T.s("速记 · 置顶"),
-                new View.OnClickListener() {
-                    public void onClick(View v) {
-                        startActivity(new Intent(MainActivity.this, MemoActivity.class));
-                    }
-                });
-        // 工具箱同样纯本机：专注、呼吸、倒计时，不联网
-        LinearLayout tToolbox = ui.tile("▦", Ui.TILE_BLUE, T.s("工具箱"), T.s("番茄钟 · 正念 · 倒计时"),
-                new View.OnClickListener() {
-                    public void onClick(View v) {
-                        startActivity(new Intent(MainActivity.this, ToolboxActivity.class));
-                    }
-                });
-        // 每行只有左格留 12dp 列缝；右格不再加边距，否则两行会差 12dp、右边缘对不齐
-        LinearLayout.LayoutParams halfLeftTop = new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        halfLeftTop.rightMargin = ui.dp(12);
-        LinearLayout.LayoutParams halfRight = new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        LinearLayout.LayoutParams halfLeftBottom = new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        halfLeftBottom.rightMargin = ui.dp(12);
-        firstRow.addView(tManage, halfLeftTop);
-        firstRow.addView(tHist, halfRight);
-        secondRow.addView(tMemo, halfLeftBottom);
-        secondRow.addView(tToolbox, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        root.addView(firstRow);
-        LinearLayout.LayoutParams secondLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        secondLp.topMargin = ui.dp(12);
-        root.addView(secondRow, secondLp);
+        LinearLayout toolGrid = new LinearLayout(this);
+        toolGrid.setOrientation(LinearLayout.VERTICAL);
+        root.addView(toolGrid);
 
         foot = new TextView(this);
         foot.setText(T.s("设备所有者由系统保护。启用前请阅读部署包的恢复说明。")
@@ -258,37 +242,6 @@ public class MainActivity extends ThemedActivity {
         foot.setPadding(0, ui.dp(20), 0, 0);
         if(ui.amap)foot.setVisibility(View.GONE);
         root.addView(foot);
-        LinearLayout deploy = ui.card(18f, 14f);
-        LinearLayout deployCopy = new LinearLayout(this);
-        deployCopy.setOrientation(LinearLayout.VERTICAL);
-        TextView deployTitle = new TextView(this);
-        deployTitle.setText(T.s("部署与权限检查"));
-        deployTitle.setTextColor(ui.text());
-        deployTitle.setTextSize(14);
-        deployTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        deployCopy.addView(deployTitle);
-        TextView deployHint = ui.sub(T.s("查看设备所有者、无障碍与通知权限"));
-        LinearLayout.LayoutParams deployHintLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        deployHintLp.topMargin = ui.dp(3);
-        deployCopy.addView(deployHint, deployHintLp);
-        deploy.addView(deployCopy, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        TextView deployArrow = new TextView(this);
-        deployArrow.setText("›");
-        deployArrow.setTextSize(22);
-        deployArrow.setTextColor(ui.text3());
-        deployArrow.setGravity(Gravity.CENTER);
-        deploy.addView(deployArrow, new LinearLayout.LayoutParams(ui.dp(28), ui.dp(44)));
-        LinearLayout deployRow = new LinearLayout(this);
-        deployRow.setGravity(Gravity.CENTER_VERTICAL);
-        deployRow.addView(deploy, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        deploy.setOnClickListener(v -> SetupGuide.show(this));
-        LinearLayout.LayoutParams deployLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        deployLp.topMargin = ui.dp(14);
-        root.addView(deployRow, deployLp);
 
         // 薄霜层盖在内容上面：全屏蔽时有"被冻住"的体感，平时不画
         final android.widget.FrameLayout shell = new android.widget.FrameLayout(this);
@@ -296,6 +249,7 @@ public class MainActivity extends ThemedActivity {
         frost = new FrostView(this);
         frost.setVisibility(View.GONE);
         shell.addView(frost);
+        toolShelf = new ToolShelf(this, ui, toolGrid, shell);
 
         // 外面再套一层：加载动画盖在最上面，首页在下面等着，两者互不干扰
         android.widget.FrameLayout host = new android.widget.FrameLayout(this);
@@ -313,6 +267,10 @@ public class MainActivity extends ThemedActivity {
         if(playStartup)LiveNavWindow.suppress(this,true);
         immersive();
         Guard.ensureService(this);   // 每次打开 App 顺手保证常驻守护在跑
+        if (!MasterSwitch.enabled(this)) {
+            // 总开关关闭时也落地一次，清掉旧版本可能遗留的应用挂起状态。
+            Guard.applyAsync(this);
+        }
         if (RuleStore.alignRequestedRules(this)) {
             new Thread(new Runnable() {
                 public void run() { Guard.apply(MainActivity.this); }
@@ -354,7 +312,7 @@ public class MainActivity extends ThemedActivity {
                     public void run() {
                         if(splash==s)splash=null;
                         s.stop();
-                        if(homeVisible)AchievementCenter.announce(MainActivity.this);
+                        if(isHomeVisible())AchievementCenter.announce(MainActivity.this);
                         ViewGroup p = (ViewGroup) s.getParent();
                         if (p != null) {
                             p.removeView(s);
@@ -394,12 +352,14 @@ public class MainActivity extends ThemedActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if(toolShelf!=null)toolShelf.refresh();
         getWindow().getDecorView().post(() -> SetupGuide.showIfNeeded(this));
         // 成就解锁提示：放在首帧之后再弹，别和首页绘制抢同一帧
-        getWindow().getDecorView().post(() -> {if(splash==null&&homeVisible)AchievementCenter.announce(this);});
+        getWindow().getDecorView().post(() -> {if(splash==null&&isHomeVisible())AchievementCenter.announce(this);});
         // 没给弹窗权限时被拦下的那次定时提醒，趁这次回到前台补上
         getWindow().getDecorView().post(() -> RestAlert.deliverPending(this));
-        homeVisible = true;
+        getWindow().getDecorView().post(() -> AlertPopupActivity.deliverPending(this));
+        MainActivity.enterHome(this);
         GrayMode.apply(this, false);
         if (ui.dark != Ui.isDark(this)) {
             recreate();
@@ -407,7 +367,7 @@ public class MainActivity extends ThemedActivity {
         }
         displayActive=true;
         immersive();      // 从别的页面/别的 App 回来时状态栏可能又冒出来，重新藏
-        nextSwitchMinute = -1L;
+        nextSwitchSecond = -1L;
         handler.removeCallbacks(tick);
         handler.post(tick);
         // 状态刷新和同步都放到首帧之后：切页那一帧只负责把页面画出来
@@ -423,7 +383,7 @@ public class MainActivity extends ThemedActivity {
         stopDisplayCount();
         if(splash!=null){SplashView reveal=splash;splash=null;reveal.stop();ViewGroup parent=(ViewGroup)reveal.getParent();if(parent!=null)parent.removeView(reveal);LiveNavWindow.suppress(this,false);}
         super.onPause();
-        homeVisible = false;
+        MainActivity.leaveHome(this);
         int state = StudyGate.cardState(this, Calendar.getInstance());
         GrayMode.apply(this, state == StudyGate.ST_ACTIVE || state == StudyGate.ST_PENDING);
         handler.removeCallbacks(tick);
@@ -451,10 +411,10 @@ public class MainActivity extends ThemedActivity {
             }
         }
 
-        Calendar now = Calendar.getInstance();
+        Calendar now = GuardClock.now(this);
 
         if (owner) {
-            statusChip.setText(T.s("运行中"));
+            statusChip.setText(GuardService.healthy()?T.s("运行中"):T.s("守护未就绪"));
             statusChip.setTextColor(ui.dark ? 0xFF66D9A0 : 0xFF0E8A50);
             statusChip.setBackground(ui.round(ui.dark ? 0xFF16302A : 0xFFE3F7EC, 99f));
         } else {
@@ -463,15 +423,15 @@ public class MainActivity extends ThemedActivity {
             statusChip.setBackground(ui.round(ui.dark ? 0xFF37212A : 0xFFFCE9E8, 99f));
         }
 
-        long minute = now.getTimeInMillis() / 60000L;
-        if (minute != nextSwitchMinute) {
-            nextSwitchMinute = minute;
-            long flip = total == 0 ? 0L : Guard.nextFlipMillis(this);
-            nextSwitchText = flip == 0L ? "—" :
-                    new java.text.SimpleDateFormat("M/d HH:mm", java.util.Locale.CHINA)
+        long second = now.getTimeInMillis() / 1000L;
+        if (second != nextSwitchSecond) {
+            nextSwitchSecond = second;
+            long flip = total == 0 ? 0L : Guard.nextScheduledChange(this);
+            nextSwitchText = flip == 0L ? T.s("无计划切换") : com.afs.core.rules.TransitionText.remaining(now.getTimeInMillis(),flip)+" · "+
+                    new java.text.SimpleDateFormat("M/d HH:mm:ss", java.util.Locale.CHINA)
                             .format(new java.util.Date(flip));
         }
-        statusOwner=owner;statusTotal=total;statusKeys=RuleStore.keyApps(this).size();
+        statusOwner=owner;statusTotal=Guard.enforcedRules(this).size();statusKeys=RuleStore.keyApps(this).size();
         updateStatusText();
         if(displayActive)MainDisplayCount.request(this,displayGeneration,++displaySequence,displayCounter);
 

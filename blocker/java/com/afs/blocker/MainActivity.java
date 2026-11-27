@@ -154,6 +154,10 @@ public class MainActivity extends Activity {
             }
         });
         pickCard.addView(pickBtn);
+        Button rules = new Button(this);
+        rules.setText("逐应用规则");
+        rules.setOnClickListener(view -> startActivity(new Intent(this, AppRulesActivity.class)));
+        pickCard.addView(rules);
         root.addView(pickCard);
 
         // ---------- 放行时段 ----------
@@ -167,7 +171,7 @@ public class MainActivity extends Activity {
         winCard.addView(windowRow);
 
         windowBtn = new Button(this);
-        windowBtn.setText("修改时段");
+        windowBtn.setText("统一修改全部应用时段");
         windowBtn.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -198,6 +202,10 @@ public class MainActivity extends Activity {
         });
         forceCard.addView(forceBtn);
         root.addView(forceCard);
+        Button diagnosis = new Button(this); diagnosis.setText("系统健康诊断");
+        diagnosis.setOnClickListener(view -> startActivity(new Intent(this,DiagnosticsActivity.class))); root.addView(diagnosis);
+        Button backup = new Button(this); backup.setText("规则备份与恢复");
+        backup.setOnClickListener(view -> startActivity(new Intent(this,RuleBackupActivity.class))); root.addView(backup);
 
         setContentView(scroll);
     }
@@ -265,10 +273,22 @@ public class MainActivity extends Activity {
         int e = Store.endMin(this);
         long force = Store.forceUntil(this);
 
-        boolean blocked = Guard.isBlocked(mod, now, force, s, e);
+        int blockedCount = 0;
+        long next = 0L;
+        String ruleError = "";
+        try {
+            for (java.util.Map.Entry<String, com.afs.core.rules.WeeklyRule> entry : Rules.all(this).entrySet()) {
+                if (Rules.blocked(this, entry.getKey(), now)) blockedCount++;
+                long candidate = Guard.nextTransition(entry.getValue(), now, force, java.util.TimeZone.getDefault());
+                if (candidate > now && (next == 0 || candidate < next)) next = candidate;
+            }
+        } catch (IllegalStateException error) {
+            ruleError = error.getMessage();
+        }
+        boolean blocked = blockedCount > 0;
         boolean forceOn = force > now;
         // 没配置过就不锁：否则装完正好落在屏蔽时段，连"选择应用"都点不动
-        boolean locked = blocked && Store.isConfigured(this);
+        boolean locked = Rules.locked(this);
 
         if (blocked) {
             bigStatus.setText("拦截中");
@@ -279,12 +299,19 @@ public class MainActivity extends Activity {
         }
 
         if (forceOn) {
-            subStatus.setText("强制模式剩余 " + Guard.remainText(force - now) + "，不可提前解除");
+            subStatus.setText("强制模式剩余 " + com.afs.core.rules.TransitionText.remaining(now, force) + "，不可提前解除");
         } else if (blocked) {
-            subStatus.setText("屏蔽时段，放行 " + Guard.windowText(s, e));
+            subStatus.setText("需拦截 " + blockedCount + " / 已配置 " + Store.targetCount(this) + " 个应用");
         } else {
-            subStatus.setText("到达 " + Guard.hhmm(e) + " 后自动恢复拦截");
+            subStatus.setText("全部放行 · 已配置 " + Store.targetCount(this) + " 个应用");
         }
+        subStatus.append(next == 0L ? "\n无计划切换" : "\n距下次切换 "
+                + com.afs.core.rules.TransitionText.remaining(now, next) + " · "
+                + new java.text.SimpleDateFormat("M/d HH:mm:ss", java.util.Locale.CHINA).format(new java.util.Date(next)));
+        if (!ruleError.isEmpty()) { bigStatus.setText("规则异常"); subStatus.append("\n" + ruleError); }
+        long success = getSharedPreferences("afs_runtime",MODE_PRIVATE).getLong("last_success",0L);
+        subStatus.append(success == 0L ? "\n尚无成功拦截记录" : "\n最近成功执行 "
+                + new java.text.SimpleDateFormat("M/d HH:mm:ss",java.util.Locale.CHINA).format(new java.util.Date(success)));
 
         if (locked) {
             lockNote.setText("锁定中：这一页的设置现在改不了，到点自动解锁。没有解除按钮。");
@@ -294,9 +321,8 @@ public class MainActivity extends Activity {
             lockNote.setText("");
         }
 
-        accStatus.setText(isAccessibilityEnabled()
-                ? "已开启。关掉它，拦截立即失效。"
-                : "未开启。没有它，App 不会拦。");
+        accStatus.setText(RuntimeStatus.healthy() ? "已连接 · 后台巡检正常"
+                : RuntimeStatus.connected ? "服务已连接 · 等待巡检" : "服务未连接，拦截尚未运行");
 
         try {
             if (!rikka.shizuku.Shizuku.pingBinder()) {
@@ -317,7 +343,7 @@ public class MainActivity extends Activity {
         }
 
         targetsRow.setText("已选 " + Store.targetCount(this) + " 个应用");
-        windowRow.setText(Guard.windowText(s, e));
+        windowRow.setText("新应用默认：" + Guard.windowText(s, e) + "\n统一修改会覆盖所有应用的星期和时段；单独设置请进入逐应用规则。");
 
         pickBtn.setEnabled(!locked);
         windowBtn.setEnabled(!locked);
@@ -357,6 +383,7 @@ public class MainActivity extends Activity {
     }
 
     private void pickWindow() {
+        if (Rules.locked(this)) { toast("锁定中，请在放行后修改规则"); return; }
         final int s = Store.startMin(this);
         final int e = Store.endMin(this);
 
@@ -368,11 +395,8 @@ public class MainActivity extends Activity {
                     @Override
                     public void onTimeSet(TimePicker v2, int h2, int m2) {
                         int ne = h2 * 60 + m2;
-                        if (ne == ns) {
-                            toast("起点和终点不能相同（那是全天放行）");
-                            return;
-                        }
-                        Store.setWindow(MainActivity.this, ns, ne);
+                        try { Store.setWindow(MainActivity.this, ns, ne); }
+                        catch (RuntimeException error) { toast(error.getMessage()); return; }
                         Store.markConfigured(MainActivity.this);
                         refresh();
                     }
@@ -389,6 +413,7 @@ public class MainActivity extends Activity {
                 .setItems(items, new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface d, int which) {
+                        if (Rules.locked(MainActivity.this)) { toast("锁定中，无法更改强制模式"); return; }
                         Store.startForce(MainActivity.this, ms[which] * 3600_000L);
                         toast("已开启，接下来的 " + items[which] + " 不可解除");
                         refresh();

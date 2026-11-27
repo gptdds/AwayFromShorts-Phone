@@ -1,0 +1,43 @@
+uniform shader image;
+uniform float2 textureSize, resolution, extent, origin, finger;
+uniform float time, pressure, releaseAge, material, pageAge;
+
+half3 environment(float2 point) {
+    float2 uv=point/resolution;
+    uv=(uv-.5)*(1.+exp(-pageAge*6.)*.12)+.5;
+    uv.y=uv.y*.85+.15;
+    float2 parallax=(finger-.5)*.018;
+    float2 flow=float2(sin(uv.y*5.+time*.15),cos(uv.x*4.+time*.12))*.008;
+    float2 textureUV=clamp(uv+parallax+flow,0.,1.);
+    return image.eval(textureUV*textureSize).rgb;
+}
+half4 main(float2 coordinate) {
+    float2 world=coordinate+origin;
+    if(material<.5) return half4(environment(world)*.8,1.);
+    float2 centered=coordinate-extent*.5;
+    float radius=material<1.5?min(extent.y*.45,extent.x*.085):extent.y*.5;
+    float2 outside=abs(centered)-(extent*.5-radius);
+    float signedDistance=length(max(outside,0.))+min(max(outside.x,outside.y),0.)-radius;
+    float thickness=material<1.5?26.:15.;
+    float edge=1.-smoothstep(-thickness,0.,signedDistance);
+    float bevel=1.-smoothstep(0.,thickness,-signedDistance);
+    float2 normal=normalize(centered/max(extent*.5,1.)+float2(.0001));
+    float2 touch=world-finger*resolution;
+    float radiusTouch=max(resolution.x*.16,1.);
+    float influence=exp(-dot(touch,touch)/(radiusTouch*radiusTouch))*pressure;
+    float ripple=sin(length(touch)*.065-releaseAge*18.)*exp(-abs(length(touch)/resolution.x-releaseAge*.45)*22.)*exp(-releaseAge*3.);
+    float2 bend=normal*bevel*thickness*.9+touch*.16*influence+normal*ripple*5.;
+    float2 sampleAt=world+bend;
+    float dispersion=bevel*4.+influence*2.;
+    half3 refracted=half3(environment(sampleAt+normal*dispersion).r,environment(sampleAt).g,environment(sampleAt-normal*dispersion).b);
+    float3 normal3=normalize(float3(normal*bevel*.85,1.-bevel*.55));
+    float3 light=normalize(float3(finger.x*2.-1.,1.-finger.y*2.,1.3));
+    float specular=pow(max(dot(reflect(-light,normal3),float3(0.,0.,1.)),0.),48.);
+    float fresnel=pow(1.-normal3.z,2.);
+    half3 tint=material<1.5?half3(.035,.065,.095):half3(.095,.10,.13);
+    half3 color=mix(refracted,tint,material<1.5?(.46-bevel*.18):.53);
+    color+=half3(.7,.85,1.)*specular*.65+half3(.3,.5,.65)*fresnel;
+    color*=1.-influence*.12;
+    float alpha=1.-smoothstep(-1.2,0.,signedDistance);
+    return half4(color*alpha,alpha);
+}

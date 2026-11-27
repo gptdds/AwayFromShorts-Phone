@@ -45,6 +45,10 @@
             android:exported="false"
             android:label="@string/pick_title" />
 
+        <activity android:name=".AppRulesActivity" android:exported="false" />
+        <activity android:name=".DiagnosticsActivity" android:exported="false" />
+        <activity android:name=".RuleBackupActivity" android:exported="false" />
+
         <!-- Shizuku 的 Provider：没有它，任何跨进程调用都会 "Request timeout" -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"

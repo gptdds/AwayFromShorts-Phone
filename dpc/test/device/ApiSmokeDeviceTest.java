@@ -13,7 +13,7 @@ public final class ApiSmokeDeviceTest extends Instrumentation {
         try {
             for (String page : new String[]{"DataManagementActivity","MainActivity","CheckinActivity","FreezeBoardActivity",
                     "StatsActivity","HistoryActivity","MemoryActivity","QuizActivity",
-                    "MemoActivity","ToolkitActivity","CardManagementActivity","ThemeActivity"}) {
+                    "MemoActivity","ToolboxActivity","TodoActivity","CardManagementActivity","ThemeActivity"}) {
                 Intent intent = new Intent().setClassName(getTargetContext(),"com.afs.guard."+page)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 Activity activity = startActivitySync(intent);

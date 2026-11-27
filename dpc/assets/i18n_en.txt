@@ -407,6 +407,10 @@ yyyy年M月d日	MMM d, yyyy
 」？	”?
 一个格子放一个应用，就是它单独的一份额度；放多个应用，就是它们共用同一份额度。应用放进冻结时段后，只累计所绑时段内的用量，额度用完才冻结；未绑定时段则全天累计。	One app in a quota means its own allowance; several apps share it. Apps inside a freeze window only count usage within their bound hours and freeze when the quota runs out; unbound quotas count all day.
 一个格子放一个应用，就是它单独的一份额度；放多个应用，就是它们共用同一份额度。应用放进冻结时段后，只累计所绑时段内的用量，额度用完才冻结；未绑定时段则全天累计。%s重置，改格子不清空已用时间。加到格子里的操作随时都能做（加应用、加分钟数）；移出应用、调小分钟数、删格子只在调整时段 %s 内开放。学习联动与禁忌惩罚继续生效。	One app in a cell gets its own allowance; several apps share one. Once tied to a freeze window, only in-window usage counts; untied cells count all day. Resets at %s; edits never reset used time. Adding (apps or minutes) works any time; removing apps, lowering minutes and deleting cells open only inside the adjustment window %s. Study links and taboo penalties keep working.
+一个格子放一个应用，就是它单独的一份额度；放多个应用，就是它们共用同一份额度。加入「或集」后，同组任意一格今天产生用量，其他格子保留 5 分钟容错后当天冻结；被使用的那一格继续按自己的额度运行。加入或集随时都能做，退出或集要等调整时段。应用放进冻结时段后，只累计所绑时段内的用量，额度用完才冻结；加入或集或未绑定时段则全天累计。%s重置，改格子不清空已用时间。加到格子里的操作随时都能做（加应用、加分钟数）；移出应用、调小分钟数、删格子只在调整时段 %s 内开放。使用限额默认参与学习联动，任务未完成时会按学习联动冻结；关键应用仍豁免。	One app in a cell gets its own allowance; several apps share one. With an OR set, the first cell used today gets a 5-minute grace window, after which the others freeze for the rest of the day; the selected cell keeps its own allowance. Joining an OR set is always available; leaving it requires the adjustment window. Apps tied to a freeze window count only in-window usage and freeze when the quota runs out; OR-set and unbound cells count all day. Resets at %s; edits never reset used time. Adding apps or minutes is always available; removing apps, lowering minutes and deleting cells open only inside the adjustment window %s. Usage quotas follow study linkage by default and freeze when today's tasks remain incomplete; key apps stay exempt.
+同组任一格开始使用 5 分钟后，其他格当天冻结	After 5 minutes of use in any cell of the set, the other cells freeze for today
+加入或集随时开放。当天先被使用的一格继续按自己的额度运行，同组其他格保留 5 分钟容错，之后冻结；到下一个额度日重新选择。	Joining an OR set is always available. The first cell used today keeps its own allowance; the other cells keep a 5-minute grace window and then freeze. The choice resets on the next quota day.
+今天还没有使用。任一格产生用量后，这一格继续使用自己的额度，其他格保留 5 分钟容错，之后当天冻结。	No usage yet today. Once any cell is used, that cell keeps its allowance while the others keep a 5-minute grace window and then freeze for the rest of the day.
 一周不断	A full week
 一天都没选	No days selected
 一次最多选择 20 个文件	At most 20 files at a time
@@ -728,6 +732,8 @@ yyyy年M月d日	MMM d, yyyy
 冻结应用是空的。点下面的「添加应用」选一个。	No frozen apps yet. Tap “Add app” below to pick one.
 冻结应用是空的，先添加应用	No frozen apps. Add one first.
 冻结应用设置	Frozen app settings
+冻结时段应用设置	Freeze window app settings
+冻结时段设置	Freeze window settings
 冻结开始时间	Freeze start time
 冻结时段	Freeze windows
 冻结时段  /  	Freeze windows  /  
@@ -940,6 +946,10 @@ yyyy年M月d日	MMM d, yyyy
 启用并授权	Enable and authorize
 启用开关、使用情况权限、删除额度	Toggle, usage access, delete a quota
 启用每日限额	Enable daily quota
+使用限额参与学习联动	Usage quotas follow study linkage
+20:00 后今天的学习目标未完成时，限额格子中的应用也会按学习联动冻结；关键应用仍豁免。关闭这项联动属于放宽，只在调整时段开放。	When today's learning goals are incomplete after 20:00, apps in quota cells also freeze under study linkage; key apps remain exempt. Turning this linkage off is a relaxation and opens only in the adjustment window.
+关闭使用限额的学习联动要等调整时段 %s	Turning off usage-quota study linkage requires the adjustment window %s
+使用限额参与学习联动：今日目标未完成，任务完成前冻结	Usage quota linked to study status: today's goals are incomplete, so this app stays frozen
 启用自定义天数	Enable custom day count
 启用解锁码	Unlock code
 吸气	Inhale
@@ -2032,6 +2042,9 @@ yyyy年M月d日	MMM d, yyyy
 热爱奖励记录违反每日上限	A passion reward entry exceeds the daily cap
 热爱抽奖 · 	Passion draw · 
 热爱收藏	Reward collector
+按卡积累 · 用一张立刻解冻时段冻结	Earn tickets per card · each ticket waives a scheduled freeze immediately
+完成攒券，用券解冻时段冻结	Earn a ticket by completing the card; spend it to waive scheduled freezes
+每张卡各自攒券；用一张即可解冻所有应用的时段冻结，持续该卡设定的分钟数。	Each card earns its own tickets; spending one waives scheduled freezes for every app for that card's configured duration.
 版本	Version
 版本：	Version: 
 特粗 · 24	Extra · 24
@@ -2838,3 +2851,335 @@ yyyy年M月d日	MMM d, yyyy
 20:00 检查未完成任务，只在当天结束的冻结后接续，持续至任务完成。跨午夜、次日才结束的冻结不参与学习联动。正在放行的应用不提前打断。完成任务解除联动，热爱奖励不抵扣。	Unfinished tasks are checked at 20:00. Learning holds continue only after freezes ending that day until tasks are complete. Overnight freezes ending the next day are excluded. Allowed apps are not interrupted. Completing tasks clears the learning hold; passion rewards do not offset it.
 
 不管选哪一种，前 15 秒都关不掉：返回键、点卡片外面都不理。提醒就是提醒，别一个手势划过去。开关只管「要不要提醒」，不管这一次能不能提前跳过。	Either way, the first 15 seconds cannot be closed — neither the back key nor a tap outside will do anything. The switch only controls whether reminders happen, not whether one can be skipped.
+松手移出这个额度	Release to leave this quota
+此应用已移出该额度	This app has already left this quota
+已移出额度，冻结时段及已用时间保留	Removed from quota; freeze schedule and used time are preserved
+移出此额度	Remove from this quota
+需要调整时段 %s；已用时间保留	Available during %s; used time is preserved
+仅非冻结时段可调整；额度和已用时间保留	Adjust only outside the app's freeze periods; quota and used time are preserved
+%d 个应用仍在冻结中，非冻结时段才能移出	%d apps remain frozen; remove them outside their freeze periods
+导出整合本地备份	Export a consolidated local backup
+从整合本地备份恢复	Restore from a consolidated local backup
+整合覆盖恢复仅限未启用设备管理或首次配置期。日常内容导入请使用下方各模块入口。	Consolidated restore is available only before device management is enabled or during the first-run grace period. Use the module import tools below for ordinary additions.
+整合数据覆盖恢复？	Restore and overwrite local data?
+数据保存在本机应用私有目录。整合备份包含目标与打卡、记忆与图片、题库与答题、卡片、笔记与附件、待办与日记、提醒与学习联动、自定规则和额度、外观与页面偏好、跨设备额度和 AI 接口设置（不含密钥），以及禁忌罚时计划。不包含云同步 / AI / 局域网凭据、解锁码与密钥、设备管理授权、首次宽限、同步缓存，以及应用私有目录外的自定义字体。ZIP 未加密，正文原样保存，请妥善保管。当前设备安全上限：解压后 %d MB。	The data lives in this app's private storage. The consolidated backup includes goals and check-ins, memory cards and images, quizzes and answers, card settings, notes and attachments, to-dos and journals, reminders and learning links, custom rules and quotas, appearance and page preferences, cross-device quota and AI endpoint settings (without secrets), and taboo penalty schedules. It excludes cloud sync, AI and LAN credentials, unlock passwords and secrets, device-management authorization, first-run grace, sync caches, and custom fonts stored outside private app storage. The ZIP is not encrypted; its contents are stored verbatim, so keep it somewhere safe. Current device limit after extraction: %d MB.
+覆盖范围：这是用户数据的白名单备份，并非系统级全局镜像。恢复只覆盖列明的数据；云端凭据、解锁密钥、设备授权、同步缓存和正在运行的提醒、计时状态不会随备份迁移。	Scope: this is an allowlisted backup of user data, not a system-level image. Restore overwrites only the listed data; cloud credentials, unlock secrets, device authorization, sync caches, and live reminder or timer state do not migrate with the backup.
+本日复习队列 %d/%d · %s	Today's review queue: %d/%d · %s
+今天已学习	Studied today
+今天未学习	Not studied today
+\n累计学习 %d 天 · 连续 %d 天。	\nTotal learning: %d days · streak: %d days.
+累计学习 %d 天 · 连续 %d 天 · %s	%d learning days · %d-day streak · %s
+累计学习 %d 天	%d learning days
+%s · 累计正确率 %s	%s · overall accuracy %s
+本月学习 %d 天 / 累计学习 %d 天	This month: %d days / total: %d days
+待办卡	To-do cards
+定时提醒 · 上滑完成	Scheduled reminders · swipe up to complete
+新建待办	New to-do
+新建一条；没定时会立刻出现在打卡页，定了时到点再出现。	Create one; without a time it appears on the check-in page immediately, with a time it appears when due.
+上滑完成 · 下滑取消 · 不占学习进度，也不延长冻结	Swipe up to complete · down to cancel · does not affect study progress or extend freezes
+定时只用来提醒和把卡推进打卡页；不完成也不会延长学习冻结。	The time only sends a reminder and moves the card to check-in; leaving it unfinished does not extend a study freeze.
+到点会发桌面通知；横幅和锁屏显示取决于系统通知设置。	A notification is sent when due; heads-up and lock-screen display depend on system notification settings.
+仅调整时段可调整；卸载后名单仍保留，额度和已用时间也不丢	Adjust only during the edit window; uninstalling keeps the list, quota and used time
+应用可以随时卸载；已加入的限额格子和已用时间会按包名保留，移出成员仍只在调整时段开放。	Apps can be uninstalled at any time; their quota cells and used time remain by package name. Removing a member is available only during the edit window.
+工具区	Tools
+＋ 添加提醒 · 到点弹桌面通知	+ Add reminder · notification when due
+修改提醒	Edit reminder
+添加提醒	Add reminder
+到点会发桌面通知，并把待办推入打卡页。不完成也不会影响学习或冻结。	A notification is sent when due and the to-do moves to the check-in page. Leaving it unfinished does not affect study or freezes.
+选择时间	Pick a time
+待办提醒	To-do reminders
+待办设定的时间到了	A to-do is due
+待办设定的时间到了，每张卡可使用自己的提醒铃声	A to-do is due; each card can play its own reminder sound
+待办提醒 · 静音	To-do reminders · Silent
+待办提醒 · 自定义铃声	To-do reminders · Custom sound
+提醒铃声	Reminder sound
+系统默认铃声	System default sound
+静音	Silent
+自定义铃声	Custom sound
+选择提醒铃声	Choose reminder sound
+试听	Preview
+当前提醒铃声为静音	The reminder sound is currently set to silent
+无法试听这个铃声	This reminder sound cannot be previewed
+系统没有可用的铃声选择器	No system ringtone picker is available
+去打卡页处理	Open check-in
+上滑完成，下滑取消待办	Swipe up to finish, down to cancel the to-do
+待办到时间了 · 	To-do due ·
+即将冻结	Freezing soon
+%s 的放行时间还剩 %d 分钟，到点就会冻结。	%s has %d minutes of allowed time left before it freezes.
+提醒弹窗	Alert pop-ups
+待办和冻结前的到点提醒	Due to-do and pre-freeze alerts
+冻结前提醒	Freeze warning
+提醒提前量	Warning lead time
+冻结前提醒提前量（分钟）	Freeze-warning lead time in minutes
+冻结前多少分钟提醒一次。	How many minutes before freezing to show the warning.
+1–180 分钟，默认 %d 分钟	1–180 minutes; default %d minutes
+请填写 %d–%d 之间的整数分钟	Enter a whole number of minutes from %d to %d
+将在冻结前 %d 分钟提醒	Will warn %d minutes before freezing
+冻结前提醒只在亮屏时弹；同一时刻将多个应用合并成一条，关掉后回到原界面。后台启动被系统拦下时，会发一条提醒通知，下一次打开应用再补弹。	The pre-freeze warning appears only while the screen is on and combines apps due at the same moment into one alert. If the system blocks the background launch, an alert notification is posted and the pop-up returns the next time you open the app.
+提前量	Lead time
+15 分钟	15 minutes
+星期冻结：	Weekday freeze:
+星期冻结：未开启（点这里选星期）	Weekday freeze: off (tap to choose days)
+星期冻结只对共享格子开放	Weekday freeze is for shared groups only
+星期冻结（选中的日子整天冻结）	Weekday freeze (selected days freeze all day)
+取消星期冻结要等调整时段 %s	Cancel weekday freeze during the adjustment window %s
+移除或移动名单要等调整时段 %s	Removing or moving list entries requires the adjustment window %s
+内置 %d	%d built in
+内置 %d / %d	%d / %d built in
+ · 外部未安装	 · external plugins not installed
+内置页面插件	Built-in page plugins
+打卡、记忆、刷题通过统一插件入口注册；当前随宿主内置，数据与冻结联动仍由宿主管理。	Check-in, memory and quiz pages register through the shared plugin entry point. They currently ship with the host, while their data and freeze integration remain host-managed.
+ · 内置 · 已启用	 · built in · enabled
+ · 内置 · 已停用	 · built in · disabled
+关闭后页面会从底栏隐藏；学习记录、统计和冻结联动都会保留。	Turning this off hides its page from the dock; learning records, statistics and freeze integration are retained.
+点击打开页面	Tap to open page
+已从底栏隐藏	Hidden from dock
+插件已停用	Plugin disabled
+保存失败，请重试	Could not save. Try again.
+外部插件	External plugins
+学习联动绑定	Study linkage bindings
+学习联动绑定无效	Invalid study linkage binding
+取消学习联动绑定只能在调整时段 %s 内修改	Unbinding study linkage requires the adjustment window %s
+学习联动绑定未能保存	Could not save study linkage bindings
+未绑定	Not linked
+断网	Network cut-off
+跟随主时段 · %s	Follows main window · %s
+自定义 · %s	Custom · %s
+断网调整时段只能在 %s 内修改	The network adjustment window can be changed only inside %s
+断网调整时段绑定未能保存	Could not save the network adjustment-window binding
+跟随冻结与限额调整时段 · %s	Follow freeze/quota adjustment window · %s
+自定义断网调整时段 · %s	Custom network adjustment window · %s
+断网调整时段绑定	Network adjustment-window binding
+学习目标来源	Learning goal sources
+任务未完成时继续约束	Continue restrictions while goals are incomplete
+勾选新的绑定可随时保存；取消绑定属于放宽，只在调整时段 %s 内开放。关键应用仍豁免。	New bindings can be added any time; unbinding is a relaxation and opens only inside the adjustment window %s. Key apps remain exempt.
+奖励卡	Reward card
+记忆、刷题可以分别触发冻结时段、时间限额、断网和奖励卡。	Memory and quiz goals can each trigger freeze windows, time quotas, network cut-off, and reward cards.
+今日学习目标未完成，奖励卡暂不能使用	Today's learning goals are incomplete; reward cards cannot be used yet
+学习联动绑定已保存	Study linkage bindings saved
+自律 · 学习联动绑定：时间限额目标已开启	Self-control · Study linkage binding: time-quota target on
+自律 · 学习联动绑定：时间限额目标已关闭	Self-control · Study linkage binding: time-quota target off
+断网参与学习联动：今日目标未完成，调整时段内也保持断网	Network cut-off follows study linkage: it stays blocked inside the adjustment window while today's goals are incomplete
+%d 个应用 · 学习联动生效，调整时段内也断网	%d apps · Study linkage is active, so they remain cut off inside the adjustment window
+今天的学习目标未完成时，限额格子中的应用也会立即按学习联动冻结；关键应用仍豁免。关闭这项联动属于放宽，只在调整时段开放。	When today's learning goals are incomplete, apps in quota cells freeze immediately under study linkage; key apps remain exempt. Turning this linkage off is a relaxation and opens only inside the adjustment window.
+中性配色	Neutral palette
+
+统计服务不可用	Usage statistics service is unavailable
+统计保存失败	Could not save usage statistics
+统计读取失败，请刷新重试	Could not read usage statistics. Refresh to retry
+手机应用使用时长 · 娱乐占比 · 电脑端	Phone app usage · Entertainment share · Computer
+需要使用情况访问权限才能读取手机应用时长	Allow usage access to read phone app usage
+前往系统授权	Open system permissions
+无法打开系统设置	Could not open system settings
+日统计	Daily
+月统计	Monthly
+年统计	Yearly
+总统计	All time
+手机应用使用时长	Phone app usage
+娱乐占比 %d%%	Entertainment share %d%%
+暂无可读取的历史	No readable history yet
+累计覆盖年份：%s	Years included: %s
+历史取决于系统留存；已有数据会持续归档。日、月、年统计按自然日历计算	History depends on system retention. Readable data is archived locally. Daily, monthly and yearly views use calendar periods
+自定义娱乐应用	Choose entertainment apps
+应用使用排行	App usage ranking
+正在读取统计…	Reading usage statistics…
+此时段暂无可读取记录	No readable records for this period
+按你选择的娱乐应用计算，占全部手机应用前台时长的比例	Selected entertainment apps as a share of all phone app foreground time
+暂无电脑端统计	No computer statistics yet
+选择年份	Choose a year
+0 分钟	0 min
+屏幕使用统计已内置，无需安装独立 APK。统计访问权限由系统管理。	Screen usage statistics are built in. No separate APK is needed. Usage access is managed by the system
+关闭后隐藏对应入口；学习记录、统计和冻结联动都会保留。	Disabling hides the entry. Study records, statistics and freeze bindings are retained
+关闭后隐藏对应入口；学习记录、统计和冻结联动都会保留。「冻结面板」可单独停用，打卡与所有卡片功能不受影响。	Disabling hides the entry. Study records, statistics and freeze bindings are retained. Freeze Board can be disabled independently without affecting check-in or any card tools.
+冻结面板	Freeze Board
+没有其他外部插件	No other external plugins
+日 · 月 · 年 · 累计	Day · Month · Year · All time
+展开其余 %d 个应用	Show %d more apps
+逐日明细：%s 起	Daily detail available from %s
+使用时间统计	Usage time statistics
+或集退出设置无效	Invalid OR-set exit setting
+同一或集的退出设置必须一致	All cells in one OR set must use the same exit setting
+或集互斥 · 5 分钟已到，已强制退出	OR-set exclusion · 5-minute limit reached; forced exit completed
+斥	Exclude
+互斥格子的 5 分钟已到	The mutual-exclusion 5-minute limit has been reached
+当前应用已被请到后台，今天不会再放行。所选格子继续按自己的额度运行。	This app was moved out of the foreground and will stay blocked today. The selected cell keeps its own allowance.
+5 分钟到点：强制退出当前互斥应用（点这里更改）	At 5 minutes: force-exit the current mutually exclusive app (tap to change)
+5 分钟到点：仅冻结，不强制退出（点这里更改）	At 5 minutes: freeze only, no forced exit (tap to change)
+仅冻结，不把当前应用请出去	Freeze only; keep the current app open
+5 分钟后强制退出当前互斥应用	Force-exit the current mutually exclusive app after 5 minutes
+互斥格子 5 分钟到点后	Mutual-exclusion action after 5 minutes
+关闭强制退出要等调整时段 %s	Turning forced exit off requires the adjustment window %s
+同组任一格开始使用 5 分钟后，其他格当天冻结；可选择是否强制退出	After any cell in the set is used for 5 minutes, the others stay frozen today; forced exit is optional
+5 分钟到点：强制退出已开启	At 5 minutes: forced exit is on
+5 分钟到点：仅冻结	At 5 minutes: freeze only
+首次强制退出等待时间	First forced-exit delay
+首次强制退出时间必须是1–5分钟	The first forced-exit delay must be 1–5 minutes
+同一或集的首次强制退出时间必须一致	All cells in one OR set must use the same first forced-exit delay
+首次等待到点后强制退出一次	Force-exit once when the first wait expires
+互斥格子的首次等待已到	The mutual-exclusion first-wait limit has been reached
+本次强制退出已完成；今天其他互斥格会在首次使用超过 5 分钟后冻结，不再重复强制退出。所选格子继续按自己的额度运行。	The one-time forced exit is complete. Other mutual-exclusion cells freeze after the first use exceeds 5 minutes and will not be forced out again today. The selected cell keeps its own allowance.
+首次等待 %d 分钟：强制退出一次（点这里更改）	First wait %d minutes: force-exit once (tap to change)
+首次强制退出：仅冻结（点这里更改）	First forced exit: freeze only (tap to change)
+首次强制退出等待：%d 分钟	First forced-exit delay: %d minutes
+首次强制退出等待：%d 分钟（点这里更改）	First forced-exit delay: %d minutes (tap to change)
+加长首次强制退出等待要等调整时段 %s	Increasing the first forced-exit delay requires the adjustment window %s
+首次强制退出等待已改为 %d 分钟	First forced-exit delay changed to %d minutes
+首次强制退出：已开启	First forced exit: enabled
+当天第一次到点会把另一格应用请出前台	At today's first limit, the other cell's foreground app will be moved out
+今天首次强制退出已完成\n超过 5 分钟后其他格冻结	First forced exit is complete today.\nOther cells freeze after more than 5 minutes.
+今天还没有使用。任一格产生用量后，这一格继续使用自己的额度；其他格可在 %d 分钟后首次强制退出，超过 5 分钟后冻结。	No cell has been used today. After any cell is used, that cell keeps its own allowance. The others can force-exit once after %d minutes and freeze after more than 5 minutes.
+今天已完成首次强制退出；其他格超过 5 分钟后冻结，不会再次强制退出。	The one-time forced exit is complete today. Other cells freeze after more than 5 minutes and will not be forced out again.
+已开启首次强制退出	First forced exit enabled
+已改为仅冻结	Changed to freeze only
+首次提醒时间必须是1–5分钟	The first reminder delay must be 1–5 minutes
+同一或集的首次提醒时间必须一致	All cells in one OR set must use the same first reminder delay
+或集互斥 · 今天已提醒一次，超过 5 分钟后其他格冻结	OR-set exclusion · already reminded once today; other cells freeze after more than 5 minutes
+互斥格子首次提醒	Mutual-exclusion first reminder
+「%s」所在的或集今天已由另一格开始使用，%d 分钟首次提醒时间已到。本次不会强制退出；超过 5 分钟后其他格子冻结。	"%s" is in an OR set that another cell started today. The %d-minute first reminder is due. This will not force the app to exit; other cells freeze after more than 5 minutes.
+一个格子放一个应用，就是它单独的一份额度；放多个应用，就是它们共用同一份额度。加入「或集」后，同组任意一格今天产生用量，被使用的那一格继续按自己的额度运行；其他格默认等待 4 分钟、可按格设置为 1–5 分钟后弹窗提醒一次，不会把当前应用请出前台；超过 5 分钟后冻结。加入或集随时都能做，退出或集要等调整时段。应用放进冻结时段后，只累计所绑时段内的用量，额度用完才冻结；加入或集或未绑定时段则全天累计。%s重置，改格子不清空已用时间。加到格子里的操作随时都能做（加应用、加分钟数）；移出应用、调小分钟数、删格子只在调整时段 %s 内开放。使用限额默认参与学习联动，任务未完成时会按学习联动冻结；关键应用仍豁免。	One app in a cell gets its own allowance; several apps share one. With an OR set, the first cell used today keeps its own allowance. The other cells show a one-time popup reminder after the default four-minute wait, configurable from 1–5 minutes, without removing the current app from the foreground, and freeze after more than 5 minutes. Joining an OR set is always available; leaving it requires the adjustment window. Apps tied to a freeze window count only in-window usage and freeze when the quota runs out; OR-set and unbound cells count all day. Resets at %s; edits never reset used time. Adding apps or minutes is always available; removing apps, lowering minutes and deleting cells open only inside the adjustment window %s. Usage quotas follow study linkage by default and freeze when today's tasks remain incomplete; key apps stay exempt.
+首次提醒等待：%d 分钟	First reminder delay: %d minutes
+首次等待 %d 分钟：弹窗提醒一次（点这里更改）	First wait %d minutes: show one popup reminder (tap to change)
+首次提醒：仅冻结（点这里更改）	First reminder: freeze only (tap to change)
+仅冻结，不弹窗提醒	Freeze only; no popup reminder
+首次等待到点后弹窗提醒一次	Show one popup reminder when the first wait expires
+关闭首次提醒要等调整时段 %s	Turning the first reminder off requires the adjustment window %s
+首次提醒等待时间	First reminder delay
+加长首次提醒等待要等调整时段 %s	Increasing the first reminder delay requires the adjustment window %s
+首次提醒等待已改为 %d 分钟	First reminder delay changed to %d minutes
+首次提醒等待：%d 分钟（点这里更改）	First reminder delay: %d minutes (tap to change)
+同组任一格先使用；首次到点弹窗提醒一次，不会请出当前应用；超过 5 分钟后其他格冻结	Any cell can be used first; it shows one popup reminder at the first boundary without removing the current app, and other cells freeze after more than 5 minutes
+首次提醒：已开启	First reminder: enabled
+首次提醒：仅冻结	First reminder: freeze only
+当天第一次到点会弹窗提醒，不会请出前台应用	At today's first boundary, show a popup reminder without removing the foreground app
+当天只冻结，不弹窗提醒	Freeze only today; no popup reminder
+可在 1–5 分钟间调整；当天只提醒一次	Adjustable from 1–5 minutes; only one reminder per day
+加入或集随时开放。当天先被使用的一格继续按自己的额度运行；其他格可设置 1–5 分钟后的首次弹窗提醒，不会请出当前应用；超过 5 分钟后冻结。到下一个额度日重新选择。	Joining an OR set is always available. The first cell used today keeps its own allowance. Other cells can show a first popup reminder after a configurable 1–5 minutes without removing the current app, then freeze after more than 5 minutes. The choice is remade on the next quota day.
+今天首次提醒已完成\n超过 5 分钟后其他格冻结	First reminder is complete today.\nOther cells freeze after more than 5 minutes
+首次等待 %d 分钟：弹窗提醒一次\n超过 5 分钟后其他格冻结	First wait %d minutes: show one popup reminder\nOther cells freeze after more than 5 minutes
+今天还没有使用。任一格产生用量后，这一格继续使用自己的额度；其他格可在 %d 分钟后弹窗提醒一次，超过 5 分钟后冻结。	No cell has been used today. After any cell is used, that cell keeps its own allowance. Other cells can show one popup reminder after %d minutes and freeze after more than 5 minutes.
+今天已完成首次提醒；其他格超过 5 分钟后冻结，不会再次提醒。	The first reminder is complete today. Other cells freeze after more than 5 minutes and will not be reminded again.
+首次等待 %d 分钟会弹窗提醒一次；其他格超过 5 分钟后冻结。	A popup reminder appears after the first %d minutes; other cells freeze after more than 5 minutes.
+已开启首次提醒	First reminder enabled
+到点会把正在使用的另一格应用请出前台	At the limit, the other cell's foreground app will be moved out
+到点只冻结，不改动当前前台应用	At the limit, only freeze; leave the current foreground app in place
+已开启 5 分钟后强制退出	Enabled forced exit after 5 minutes
+已改为 5 分钟后仅冻结	Changed to freeze only after 5 minutes
+\n5 分钟到点后会强制退出正在使用的其他成员。	\nAt the 5-minute limit, the other active member will be force-exited.
+\n5 分钟到点后只冻结，不强制退出。	\nAt the 5-minute limit, it will freeze only without forcing the app to exit.
+一个格子放一个应用，就是它单独的一份额度；放多个应用，就是它们共用同一份额度。加入「或集」后，同组任意一格今天产生用量，其他格保留 5 分钟容错后当天冻结；默认会在 5 分钟到点后强制退出正在使用的其他成员，被使用的那一格继续按自己的额度运行。加入或集随时都能做，退出或集要等调整时段。应用放进冻结时段后，只累计所绑时段内的用量，额度用完才冻结；加入或集或未绑定时段则全天累计。%s重置，改格子不清空已用时间。加到格子里的操作随时都能做（加应用、加分钟数）；移出应用、调小分钟数、删格子只在调整时段 %s 内开放。使用限额默认参与学习联动，任务未完成时会按学习联动冻结；关键应用仍豁免。	One app in a cell gets its own allowance; several apps share one. With an OR set, the first cell used today gets a 5-minute grace window, after which the others freeze for the rest of the day and are force-exited by default; the selected cell keeps its own allowance. Joining an OR set is always available; leaving it requires the adjustment window. Apps tied to a freeze window count only in-window usage and freeze when the quota runs out; OR-set and unbound cells count all day. Resets at %s; edits never reset used time. Adding apps or minutes is always available; removing apps, lowering minutes and deleting cells open only inside the adjustment window %s. Usage quotas follow study linkage by default and freeze when today's tasks remain incomplete; key apps stay exempt.
+一个格子放一个应用，就是它单独的一份额度；放多个应用，就是它们共用同一份额度。加入「或集」后，同组任意一格今天产生用量，被使用的那一格继续按自己的额度运行；其他格默认等待 5 分钟、可按格设置为 1–5 分钟后首次强制退出一次，超过 5 分钟后冻结。加入或集随时都能做，退出或集要等调整时段。应用放进冻结时段后，只累计所绑时段内的用量，额度用完才冻结；加入或集或未绑定时段则全天累计。%s重置，改格子不清空已用时间。加到格子里的操作随时都能做（加应用、加分钟数）；移出应用、调小分钟数、删格子只在调整时段 %s 内开放。使用限额默认参与学习联动，任务未完成时会按学习联动冻结；关键应用仍豁免。	One app in a cell gets its own allowance; several apps share one. With an OR set, the first cell used today keeps its own allowance. The other cells can force-exit the foreground app once after a configurable 1–5 minute delay and freeze after more than 5 minutes. Joining an OR set is always available; leaving it requires the adjustment window. Apps tied to a freeze window count only in-window usage and freeze when the quota runs out; OR-set and unbound cells count all day. Resets at %s; edits never reset used time. Adding apps or minutes is always available; removing apps, lowering minutes and deleting cells open only inside the adjustment window %s. Usage quotas follow study linkage by default and freeze when today's tasks remain incomplete; key apps stay exempt.
+一个格子放一个应用，就是它单独的一份额度；放多个应用，就是它们共用同一份额度。加入「或集」后，同组任意一格今天产生用量，被使用的那一格继续按自己的额度运行；其他格默认等待 4 分钟、可按格设置为 1–5 分钟后首次强制退出一次，超过 5 分钟后冻结。加入或集随时都能做，退出或集要等调整时段。应用放进冻结时段后，只累计所绑时段内的用量，额度用完才冻结；加入或集或未绑定时段则全天累计。%s重置，改格子不清空已用时间。加到格子里的操作随时都能做（加应用、加分钟数）；移出应用、调小分钟数、删格子只在调整时段 %s 内开放。使用限额默认参与学习联动，任务未完成时会按学习联动冻结；关键应用仍豁免。	One app in a cell gets its own allowance; several apps share one. With an OR set, the first cell used today keeps its own allowance. The other cells force-exit the foreground app once after the default four-minute delay, can be configured from 1–5 minutes, and freeze after more than 5 minutes. Joining an OR set is always available; leaving it requires the adjustment window. Apps tied to a freeze window count only in-window usage and freeze when the quota runs out; OR-set and unbound cells count all day. Resets at %s; edits never reset used time. Adding apps or minutes is always available; removing apps, lowering minutes and deleting cells open only inside the adjustment window %s. Usage quotas follow study linkage by default and freeze when today's tasks remain incomplete; key apps stay exempt.
+总开关	Master switch
+总开关状态未能保存	Could not save the master switch state
+总开关未能开启	Could not turn on the master switch
+总开关已开启，原有规则已恢复执行	Master switch enabled; existing rules are active again
+关闭总开关只能在调整时段 %s 内进行；开启不受限制	The master switch can only be turned off during the adjustment window %s; turning it on is unrestricted
+已关闭 · 调整时段已清零	Off · adjustment window cleared
+总开关关闭，调整时段已清零；开启总开关后再设置	The master switch is off and the adjustment window is cleared. Turn it on before changing the window.
+关闭后会立即解除应用冻结、使用限额、学习联动、断网、页面拦截、锁机和亮屏灰度；调整时段会清零。全部规则与名单都会保留，之后随时可以重新开启。	Turning it off immediately releases app freezes, usage limits, study linkage, network blocking, page blocking, lock sessions and screen-on grayscale, and clears the adjustment window. All rules and lists remain saved, and it can be turned back on at any time.
+总开关已关闭，调整时段已清零；规则和名单已保留	Master switch disabled and adjustment window cleared; rules and lists remain saved
+总开关关闭时断网设置暂停	Network settings are paused while the master switch is off
+关闭总开关	Turn off master switch
+关闭后会立即解除应用冻结、使用限额、学习联动、断网、页面拦截、锁机和亮屏灰度。全部规则与名单都会保留，之后随时可以重新开启。	Turning it off immediately releases app freezes, usage limits, study linkage, network blocking, page blocking, lock sessions and screen-on grayscale. All rules and lists remain saved, and it can be turned back on at any time.
+关闭总开关只能在调整时段 %s 内进行	The master switch can only be turned off during the adjustment window %s
+总开关已关闭，规则和名单已保留	Master switch disabled; rules and lists remain saved
+总开关已关闭 · 已解除冻结和临时限制	Master switch disabled; freezes and temporary restrictions released
+总开关关闭	Master switch off
+总开关　　　	Master switch
+已关闭（规则与名单已保留）	Off (rules and lists saved)
+冻结、限额、学习联动、断网、页面拦截、锁机和亮屏灰度均已暂停；规则和名单保留。	Freezes, limits, study linkage, network blocking, page blocking, lock sessions and screen-on grayscale are paused; rules and lists remain saved.
+总开关关闭 · 亮屏灰度已暂停	Master switch off; screen-on grayscale is paused
+全局按星期停用	Pause freeze windows by weekday
+全局按星期停用冻结时段	Pause all freeze windows by weekday
+未开启 · 所有冻结时段照常生效	Off · all freeze windows apply normally
+今日按星期暂停 · %d 个时段 · %d 个应用	Paused today by weekday · %d windows · %d apps
+今日暂停 · %s	Paused today · %s
+将在 %s 整日暂停	Starting %s, freeze windows pause all day
+所选日期的全部冻结时段暂停；时间限额、或集、学习联动和罚时仍生效。规则、应用名单和已用时间都会保留。	Operational freeze windows pause on the selected weekdays. Time quotas, OR sets, study linkage and penalties still apply. Rules, app membership and used time are preserved.
+已恢复所有星期的冻结时段	Freeze windows restored for every weekday
+已更新按星期停用：%s	Weekday pause updated: %s
+先拍一张照片才能领取热爱卡	Take a photo before claiming a passion ticket
+照片没有保存成功，请重拍	The photo was not saved. Please retake it.
+热爱卡数据已失效	The passion card data is no longer available.
+照片目录无法创建，请重试	Could not create the photo folder. Try again.
+照片文件无法创建，请重试	Could not create the photo file. Try again.
+没有可用的相机，无法领取热爱券	No camera is available, so the passion ticket cannot be claimed.
+相机无法打开，请重试	Could not open the camera. Try again.
+已拍照并攒一张热爱券	Photo taken; one passion ticket earned
+照片只保存在本机。领取满 24 小时后才能在卡管理使用；用一张立刻解冻时段冻结。	The photo stays on this device. The ticket becomes usable in Card Management after 24 hours; using one immediately lifts the scheduled freeze.
+照片只保存在本机。领取满 24 小时后才能在卡管理使用。	The photo stays on this device. The ticket becomes usable in Card Management after 24 hours.
+相机里没有拿到照片，请重拍	No photo was returned by the camera. Please retake it.
+未拍照，未领取热爱券	No photo was taken, so no passion ticket was claimed.
+松手，拍照并完成热爱	Release to take a photo and finish this passion
+拍照后攒一张券	Photo required for a ticket
+上滑先拍一张照片，拍完才攒一张券，满 24 小时后可用。	Swipe up to take a photo first; the ticket is earned only after the photo and becomes usable after 24 hours.
+每日限额用量暂不可读，稍后再试	Daily quota usage is temporarily unreadable. Try again later.
+额度日切换尚未完成，请稍后再试	The quota day has not finished rolling over. Try again shortly.
+延时冻结至 %s · 认领再追加 %d 分钟冻结和限额	Extended freeze until %s · another claim adds %d minutes to the freeze and quota
+认领一次 · 冻结 +%d 分钟 · 限额 -%d 分钟	Each claim · freeze +%d min · quota -%d min
+已安排冻结追加并扣减时间限额 · 长按可再认一次	Freeze extension and quota reduction scheduled · long-press to claim again
+今天已认领 · 冻结和限额已追加	Claimed today · freeze extended and quota reduced
+手动追加 · 可重复叠加	Manual additions · can be stacked repeatedly
+再延长冻结 %d 分钟	Extend freeze another %d min
+再减少限额 %d 分钟	Reduce quota another %d min
+手动延长冻结	Extend freeze manually
+立即再追加 %d 分钟冻结？这个按钮只改冻结，不扣时间限额。	Add %d more minutes to the freeze now? This button only changes the freeze, not the time quota.
+追加	Add
+已延长冻结 %d 分钟	Freeze extended by %d minutes
+手动减少时间限额	Reduce time quota manually
+立即把所有时间限额格子各减少 %d 分钟？这个按钮只改限额，不延长冻结。	Reduce every time-quota cell by %d minutes now? This button only changes quotas, not the freeze.
+扣减	Deduct
+没有可扣减的时间限额格子	There are no time-quota cells to deduct from.
+已减少时间限额 %d 分钟（%d 个格子）	Reduced time quota by %d minutes (%d cells)
+ · 时间限额扣减失败：%s	 · Time-quota deduction failed: %s
+未知错误	Unknown error
+ · 时间限额 -%d 分钟	 · Time quota -%d min
+ · 时间限额未配置	 · No time quota configured
+认领「%s」· 各应用冻结结束后追加 %d 分钟	Claimed “%s” · %d minutes will be added after each app's scheduled freeze
+「%s」今天再认一次？\n\n冻结再延长 %d 分钟，时间限额再减少 %d 分钟（都会叠加）。	Claim “%s” again today?\n\nThe freeze will be extended by another %d minutes and the time quota reduced by another %d minutes (both stack).
+「%s」认领一次？\n\n冻结程序将延长 %d 分钟，时间限额减少 %d 分钟（都可叠加）。	Claim “%s”?\n\nThe freeze will be extended by %d minutes and the time quota reduced by %d minutes (both stack).
+认领惩罚时长	Claim penalty duration
+%d 分钟 · 冻结与限额共用	%d min · shared by freeze and quota
+认领时生效	Applies when claiming
+开关只决定之后认领时是否执行，不会立即改动当前时长。	Switches only control future claims; they do not change the current duration immediately.
+现在只能查看。开关和时长只在调整时段 %s 内修改。	View only for now. Switches and duration can be changed only during the adjustment window %s.
+认领惩罚设置只在调整时段 %s 内修改	Claim penalty settings can be changed only during the adjustment window %s
+延长冻结时段	Extend freeze window
+减少时间限额	Reduce time quota
+下次认领：%s	Next claim: %s
+只延长冻结 +%d 分钟	Freeze only +%d min
+只减少时间限额 %d 分钟	Quota only -%d min
+不追加冻结或限额	No freeze or quota penalty
+冻结 +%d 分钟	Freeze +%d min
+不延长冻结	No freeze extension
+延时冻结至 %s · 认领时 %s	Extended freeze until %s · next claim: %s
+认领一次 · %s	Each claim · %s
+已按开关记录认领 · %s · 长按可再认一次	Claimed with current switches · %s · long-press to claim again
+「%s」今天再认一次？\n\n本次：%s（都会叠加）。	Claim “%s” again today?\n\nThis time: %s (all stack).
+「%s」认领一次？\n\n本次：%s（可叠加）。	Claim “%s”?\n\nThis time: %s (can stack).
+认领「%s」· %s	Claimed “%s” · %s
+ · 不扣限额	 · No quota deduction
+今天已认领 · 按认领时开关执行	Claimed today · applied with the switches at claim time
+ 张可用热爱券	 available passion tickets
+按卡积累 · 用一张解冻所有应用的时段冻结和使用限额 · 领取后需满 24 小时才能使用。	Earn per card · Spend one to lift scheduled freezes and usage quotas for all apps · A ticket becomes usable 24 hours after earning.
+ 待解锁 	locked: 
+ 张可用券	 available tickets
+每张卡各自攒券；领取满 24 小时后才能使用，用一张即可解冻所有应用的时段冻结和使用限额，持续该卡设定的分钟数。	Tickets accumulate per card. A ticket becomes usable 24 hours after earning. Spend one to lift scheduled freezes and usage quotas for all apps for the card's configured minutes.
+ 当前待解锁 	currently locked: 
+ 张可用 · 	available · 
+ 张待解锁 · 每张 	locked · each 
+热爱券领取满 24 小时后才能使用	A passion ticket becomes usable 24 hours after it is earned.
+可用券 	Available tickets: 
+ 张 · 待解锁 	· locked: 
+ 张\n	tickets\n
+ · 已使用	 · used
+ · 可用	 · available
+ · 待解锁 · 	 · locked until 
+下滑按禁忌卡认领处理	Swipe down counts as a taboo claim
+开启后，下滑这张目标卡会延长冻结并按开关减少时间限额；不会记为已打卡。	When on, swiping this goal card down extends the freeze and reduces time quotas according to the switches; it is not recorded as a check-in.
+下滑：按禁忌卡认领执行	Swipe down: taboo claim
+下滑：无动作	Swipe down: no action
+松手，按禁忌认领	Release to claim as taboo
+↑ 打卡   ↓ 按禁忌认领	↑ check in   ↓ taboo claim
+目标下滑：	Goal swipe down: 
+下滑「%s」· %s	Swipe down “%s” · %s

@@ -1,0 +1,33 @@
+uniform shader backdrop;
+uniform float2 textureSize,extent,origin,resolution,finger;
+uniform float time,pressure,releaseAge,role,corner,focus;
+uniform float3 baseColor;
+uniform float lightInk,semantic;
+half4 main(float2 point) {
+    float2 uv=point/max(extent,1.);
+    float radius=min(corner,min(extent.x,extent.y)*.5);
+    float2 q=abs(point-extent*.5)-(extent*.5-radius);
+    float distance=length(max(q,0.))+min(max(q.x,q.y),0.)-radius;
+    float edge=1.-smoothstep(0.,min(25.,extent.y*.22),-distance);
+    float2 normal=normalize((uv-.5)*2.+float2(.001));
+    float2 touch=uv-finger;
+    float dent=exp(-dot(touch,touch)*15.)*pressure;
+    float wave=sin(length(touch)*28.-releaseAge*12.)*exp(-abs(length(touch)-releaseAge*.55)*18.)*exp(-releaseAge*4.);
+    float2 sample=(origin+point+normal*edge*38.+touch*dent*45.+normal*wave*10.)/resolution*textureSize;
+    half3 refraction=half3(backdrop.eval(sample+normal*3.2*edge).r,backdrop.eval(sample).g,backdrop.eval(sample-normal*3.2*edge).b);
+    float spec=pow(max(0.,dot(normal,normalize(finger-.5+float2(-.2,-.7)))),6.)*edge;
+    float softbox=exp(-abs(uv.y-(.12+uv.x*.16+sin(time*.22)*.02))*28.);
+    float mask=1.-smoothstep(-1.,0.,distance+dent*2.);
+    half3 pearl=mix(half3(.88,.96,.99),half3(.045,.12,.18),lightInk);
+    half3 color=mix(pearl,refraction,lightInk>.5?.10:.28);
+    color=mix(color,baseColor,semantic*.82);
+    float innerRim=exp(-abs(distance+6.)*.40);
+    color+=half3(.64,.88,1.)*spec*.34+half3(.8,.9,1.)*softbox*.13;
+    color-=half3(.16,.24,.30)*edge*(1.-spec)*.62;
+    color+=half3(.70,.90,1.)*innerRim*.38;
+    if(role==3.)color*=.91+focus*.06;
+    color*=1.-dent*.22;
+    float alpha=clamp((.88+edge*.10)*mask,0.,1.);
+    color=clamp(color,0.,1.);
+    return half4(color*alpha,alpha);
+}

@@ -14,13 +14,18 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.provider.Settings;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.EditText;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import com.afs.guard.plugins.DockPages;
 
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -32,7 +37,7 @@ import java.net.URL;
 /**
  * 设置：外观、语言、权限体检、检查更新、隐私说明。额度设置在冻结页的「时间限额」里。
  *
- * 这一页只做"看和跳转"，不改任何冻结/打卡业务规则。
+ * 这一页主要做查看和跳转；「冻结前提醒」是自律区里的独立快捷开关和提前量设置。
  * 每个权限项都显示真实状态，跳不过去的（设备所有者）直说要走部署包，不给假按钮。
  */
 public final class SettingsActivity extends ThemedActivity {
@@ -89,29 +94,39 @@ public final class SettingsActivity extends ThemedActivity {
                 StartupPreferences.enabled(this) ? T.s("已开启") : T.s("已关闭"),
                 this::toggleStartupAnimation);
         row(look, Lang.t(this, "界面语言", "Language"), Lang.modeName(this), this::pickLanguage);
-        addNote(look, Lang.t(this,
-                "风格、深浅、主题色、字体、圆角都在这一页调，改完立刻生效，不用重启。开屏动画关闭后直接进入主页面；Android 12 及以上仍会显示系统提供的启动遮罩。",
-                "Style, light/dark, accent colour, fonts and corner radius are set here and apply immediately. Turning off the opening animation goes straight to the main page; Android 12 and later still show the platform launch screen."));
 
         /* ---------- 自律 ---------- */
         body.addView(groupTitle(Lang.t(this, "自律", "Self-control")));
         LinearLayout control = ui.card();
         body.addView(control, ui.gap(10));
+        row(control, Lang.t(this, "总开关", "Master switch"),
+                MasterSwitch.enabled(this)
+                        ? T.s("已开启 · 仅调整时段可修改")
+                        : T.s("已关闭 · 调整时段已清零（可预设）"),
+                this::toggleMasterSwitch);
         row(control, Lang.t(this, "自律规则", "Self-control rules"), ControlActivity.summary(this),
                 () -> startActivity(new Intent(this, ControlActivity.class)));
-        row(control, Lang.t(this, "调整时段", "Adjustment window"), TimeWindow.label(this),
+        row(control, T.s("全局按星期停用"), FreezeWeekdayPolicy.summary(this),
+                () -> FreezeWeekdayPolicyDialog.show(this, ui, this::render));
+        row(control, T.s("AI/外部调整"), AiAdjustmentStore.summary(this),
+                this::showAiAdjustmentStats);
+        row(control, T.s("学习联动绑定"), LearningBindings.summary(this),
+                this::editLearningBindings);
+        row(control, T.s("每日时间限额重置时间"), DayBoundary.summary(this),
+                this::editQuotaResetTime);
+        row(control, T.s("亮屏时间上限"), ScreenOnLimit.summary(this),
+                this::editScreenOnLimit);
+        row(control, T.s("冻结前提醒"), FreezeWarn.enabled(this) ? T.s("已开启") : T.s("已关闭"),
+                this::toggleFreezeWarn);
+        row(control, T.s("提醒提前量"), T.f("%d 分钟", FreezeWarn.minutes(this)),
+                this::editFreezeWarnMinutes);
+        row(control, Lang.t(this, "调整时段", "Adjustment window"), TimeWindow.summary(this),
                 () -> TimeWindow.pick(this, this::render));
-        addNote(control, Lang.t(this,
-                "调整时段只管「收紧」那一头：冻结名单、移出应用、调小额度这些操作只在时段内能改，时段外只能加不能减。每日限额的计时和判定不管这个时段，全天都算。断网不归它管。",
-                "The adjustment window only governs tightening: editing the freeze list, removing apps or lowering a quota is allowed inside it; outside you can only add. Daily quotas are counted and enforced all day regardless. Network blocking is not part of it."));
-        row(control, Lang.t(this, "断网调整时段", "Cut-off adjustment window"), NetWindow.label(this),
+        row(control, Lang.t(this, "断网调整时段", "Cut-off adjustment window"), NetWindow.summary(this),
                 () -> {
                     // 时段本身也是设置：能随便改时段就等于绕过了断网的锁。
                     if (NetWindow.canEdit(this)) NetWindow.pick(this, this::render);
                 });
-        addNote(control, Lang.t(this,
-                "断网名单里的应用默认全天断网，只有这个时段内自动放开；开关、名单和时段本身也只能在此时段内修改。默认每晚 22:00–23:00，与限额／冻结的调整时段各自独立、互不相干。",
-                "Apps in the cut-off list have no network by default and are released only inside this window. The switch, the list and this window itself can be changed only inside it. Default 22:00-23:00 nightly, independent of the quota/freeze adjustment window."));
 
         /* ---------- 应用 ---------- */
         body.addView(groupTitle(Lang.t(this, "应用", "App")));
@@ -124,23 +139,19 @@ public final class SettingsActivity extends ThemedActivity {
         row(app, Lang.t(this, "数据与备份", "Data & backup"),
                 Lang.t(this, "本地存储 / 云端配置", "Local storage / cloud sync"),
                 () -> startActivity(new Intent(this, DataManagementActivity.class)));
-        addNote(app, Lang.t(this,
-                "成就汇总打卡、记忆、刷题、笔记与日记。打卡日记开关已移到打卡历史的日历卡片。",
-                "Achievements span check-ins, memory, quizzes, notes and journals. The journal switch lives in the calendar card on the history page."));
 
         /* ---------- 跨设备 ---------- */
         body.addView(groupTitle(Lang.t(this, "跨设备", "Across devices")));
         LinearLayout cross = ui.card();
         body.addView(cross, ui.gap(10));
         row(cross, Lang.t(this, "共享额度", "Shared quota"), lanSummary(), this::lanQuotaEditor);
-        addNote(cross, Lang.t(this,
-                "把手机上某一个额度格子接到电脑上：两边各记各的用量，合起来算一个池子，任一边用完另一边也停。优先走家里 WiFi（3 秒级）；出门连不上时退回到 Gist 上最近一次的账，分钟级延迟、数字偏乐观。",
-                "Binds one phone bucket to the PC: both sides report their own usage into one pool, and either side running dry stops both. Home wifi first (3-second sync); away from home it falls back to the last snapshot on Gist, which lags by minutes and reads optimistically."));
 
         /* ---------- 权限 ---------- */
         body.addView(groupTitle(Lang.t(this, "权限体检", "Permissions")));
         LinearLayout perms = ui.card();
         body.addView(perms, ui.gap(10));
+        row(perms, T.s("部署与权限检查"), "›", () -> SetupGuide.show(this));
+        row(perms,T.s("系统健康诊断"),"›",()->startActivity(new Intent(this,DiagnosticsActivity.class)));
         permRow(perms, T.s("设备所有者"), Guard.isOwner(this), Guard.isOwner(this)
                 ? T.s("冻结与锁机的基础能力")
                 : T.s("需要部署包授权，系统设置里开不了"), null);
@@ -190,18 +201,296 @@ public final class SettingsActivity extends ThemedActivity {
         PageScrollState.restore(this, position);
     }
 
+    private void editQuotaResetTime() {
+        if (!requireQuotaEditWindow()) return;
+        android.app.TimePickerDialog picker = new android.app.TimePickerDialog(this, (view, hour, minute) -> {
+            if (!requireQuotaEditWindow()) return;
+            if (!DayBoundary.saveTime(this, hour, minute)) {
+                toast(T.s("重置时间未能保存，请重试"));
+                return;
+            }
+            toast(DayBoundary.summary(this));
+            render();
+        }, DayBoundary.selectedHour(this), DayBoundary.selectedMinute(this), true);
+        picker.setTitle(T.s("每日时间限额重置时间"));
+        picker.setMessage(T.s("新时间在下一次原重置时刻生效，不立即清空已用时间。"));
+        picker.show();
+    }
+
+    private void toggleMasterSwitch() {
+        if (!MasterSwitch.canEdit(this)) {
+            toast(T.f("关闭总开关只能在调整时段 %s 内进行；开启不受限制",
+                    TimeWindow.label(this)));
+            return;
+        }
+        if (!MasterSwitch.enabled(this)) {
+            if (!MasterSwitch.setEnabled(this, true)) {
+                toast(T.s("总开关未能开启"));
+                return;
+            }
+            toast(T.s("总开关已开启，原有规则已恢复执行"));
+            render();
+            return;
+        }
+        ThemeStore.dialog(this)
+                .setTitle(T.s("关闭总开关"))
+                .setMessage(T.s("关闭后会立即解除应用冻结、使用限额、学习联动、断网、页面拦截、锁机和亮屏灰度；调整时段会清零。全部规则与名单都会保留，之后随时可以重新开启。"))
+                .setNegativeButton(T.s("取消"), null)
+                .setPositiveButton(T.s("关闭"), (dialog, which) -> {
+                    if (!MasterSwitch.setEnabled(this, false)) {
+                        toast(T.f("关闭总开关只能在调整时段 %s 内进行",
+                                TimeWindow.label(this)));
+                        return;
+                    }
+                    toast(T.s("总开关已关闭，调整时段已清零；规则和名单已保留"));
+                    render();
+                })
+                .show();
+    }
+
+    private void showAiAdjustmentStats() {
+        ThemeStore.dialog(this)
+                .setTitle(T.s("AI/外部调整统计"))
+                .setMessage(AiAdjustmentStore.detail(this))
+                .setPositiveButton(T.s("知道了"), null)
+                .show();
+    }
+
+    private void editScreenOnLimit() {
+        if (!requireQuotaEditWindow()) return;
+        int[] presets = {60, 120, 180, 240, 360, 480};
+        final String[] labels = new String[presets.length + 2];
+        labels[0] = T.s("关闭");
+        for (int i = 0; i < presets.length; i++) {
+            labels[i + 1] = T.f("每天 %d 小时", presets[i] / 60);
+        }
+        labels[labels.length - 1] = T.s("自定义…");
+        ThemeStore.dialog(this)
+                .setTitle(T.s("亮屏时间上限"))
+                .setItems(labels, (dialog, which) -> {
+                    if (!requireQuotaEditWindow()) return;
+                    if (which == 0) {
+                        ScreenOnLimit.configure(this, false, ScreenOnLimit.minutes(this));
+                        render();
+                    } else if (which <= presets.length) {
+                        ScreenOnLimit.configure(this, true, presets[which - 1]);
+                        render();
+                    } else {
+                        customScreenOnLimit();
+                    }
+                }).show();
+    }
+
+    private void customScreenOnLimit() {
+        if (!requireQuotaEditWindow()) return;
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setHint(T.s("分钟，例如 150"));
+        input.setText(String.valueOf(ScreenOnLimit.minutes(this)));
+        input.setSelectAllOnFocus(true);
+        int pad = ui.dp(18);
+        android.widget.FrameLayout box = new android.widget.FrameLayout(this);
+        box.setPadding(pad, ui.dp(4), pad, 0);
+        box.addView(input, new android.widget.FrameLayout.LayoutParams(-1, -2));
+        android.app.AlertDialog dialog = ThemeStore.dialog(this)
+                .setTitle(T.s("自定义亮屏上限"))
+                .setMessage(T.f("每天累计亮屏达到这个时长后，整机自动变灰；%s恢复。",
+                        DayBoundary.label(this)))
+                .setView(box)
+                .setNegativeButton(T.s("取消"), null)
+                .setPositiveButton(T.s("保存"), null)
+                .create();
+        dialog.setOnShowListener(d -> dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE)
+                .setOnClickListener(v -> {
+                    if (!requireQuotaEditWindow()) return;
+                    int minutes;
+                    try {
+                        minutes = Integer.parseInt(input.getText().toString().trim());
+                    } catch (NumberFormatException error) {
+                        toast(T.s("请输入 5–1440 之间的分钟数"));
+                        return;
+                    }
+                    if (minutes < 5 || minutes > 24 * 60) {
+                        toast(T.s("请输入 5–1440 之间的分钟数"));
+                        return;
+                    }
+                    ScreenOnLimit.configure(this, true, minutes);
+                    dialog.dismiss();
+                    render();
+                }));
+        dialog.show();
+    }
+
+    private boolean requireQuotaEditWindow() {
+        if (DailyQuotaStore.editable(this)) return true;
+        toast(T.f("自律规则只在调整时段 %s 内可修改", TimeWindow.label(this)));
+        return false;
+    }
+
+    private void toggleFreezeWarn() {
+        if (!DailyQuotaStore.editable(this)) {
+            toast(T.f("自律规则只在调整时段 %s 内可修改", TimeWindow.label(this)));
+            return;
+        }
+        boolean enabled = !FreezeWarn.enabled(this);
+        FreezeWarn.setEnabled(this, enabled);
+        if (enabled && !RestReminderActivity.backgroundAllowed(this)) {
+            toast(T.s("请允许后台提醒弹窗"));
+            try {
+                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName())));
+            } catch (RuntimeException error) {
+                toast(T.s("请在系统设置中允许悬浮窗"));
+            }
+        }
+        render();
+    }
+
+    /**
+     * 学习来源和承接目标分开展示，五项都在同一页，含义不会被一个复选框揉在一起。
+     */
+    private void editLearningBindings() {
+        LearningBindings.Binding current = LearningBindings.read(this);
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(ui.dp(22), ui.dp(6), ui.dp(22), ui.dp(4));
+
+        TextView sourceTitle = new TextView(this);
+        sourceTitle.setText(T.s("学习目标来源"));
+        sourceTitle.setTextSize(14);
+        sourceTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        sourceTitle.setTextColor(ui.text());
+        sourceTitle.setPadding(0, ui.dp(8), 0, ui.dp(2));
+        panel.addView(sourceTitle);
+
+        CheckBox memory = bindingCheck(T.s("记忆"), current.memory);
+        CheckBox quiz = bindingCheck(T.s("刷题"), current.quiz);
+        panel.addView(memory);
+        panel.addView(quiz);
+
+        TextView targetTitle = new TextView(this);
+        targetTitle.setText(T.s("任务未完成时继续约束"));
+        targetTitle.setTextSize(14);
+        targetTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        targetTitle.setTextColor(ui.text());
+        targetTitle.setPadding(0, ui.dp(14), 0, ui.dp(2));
+        panel.addView(targetTitle);
+
+        CheckBox gate = bindingCheck(T.s("冻结时段"), current.gate);
+        CheckBox quota = bindingCheck(T.s("时间限额"), current.quota);
+        CheckBox network = bindingCheck(T.s("断网"), current.network);
+        panel.addView(gate);
+        panel.addView(quota);
+        panel.addView(network);
+        CheckBox reward = bindingCheck(T.s("奖励卡"), current.reward);
+        panel.addView(reward);
+
+        TextView note = new TextView(this);
+        note.setText(T.f("勾选新的绑定可随时保存；取消绑定属于放宽，只在调整时段 %s 内开放。关键应用仍豁免。",
+                TimeWindow.label(this)));
+        note.setTextSize(12);
+        note.setTextColor(ui.text3());
+        note.setPadding(0, ui.dp(12), 0, 0);
+        panel.addView(note);
+
+        final AlertDialog dialog = ThemeStore.dialog(this)
+                .setTitle(T.s("学习联动绑定"))
+                .setMessage(T.s("记忆、刷题可以分别触发冻结时段、时间限额、断网和奖励卡。"))
+                .setView(panel)
+                .setNegativeButton(T.s("取消"), null)
+                .setPositiveButton(T.s("保存"), null)
+                .create();
+        dialog.setOnShowListener(ignored ->
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    LearningBindings.Binding next = new LearningBindings.Binding(
+                            memory.isChecked(), quiz.isChecked(), gate.isChecked(),
+                            quota.isChecked(), network.isChecked(), reward.isChecked());
+                    try {
+                        LearningBindings.save(this, next);
+                    } catch (RuntimeException error) {
+                        toast(error.getMessage() == null ? T.s("学习联动绑定未能保存") : error.getMessage());
+                        return;
+                    }
+                    dialog.dismiss();
+                    toast(T.s("学习联动绑定已保存"));
+                    render();
+                }));
+        dialog.show();
+    }
+
+    private CheckBox bindingCheck(String label, boolean checked) {
+        CheckBox box = new CheckBox(this);
+        box.setText(label);
+        box.setTextSize(15);
+        box.setTextColor(ui.text());
+        box.setChecked(checked);
+        box.setPadding(0, ui.dp(3), 0, ui.dp(3));
+        return box;
+    }
+
+    private void editFreezeWarnMinutes() {
+        if (!DailyQuotaStore.editable(this)) {
+            toast(T.f("自律规则只在调整时段 %s 内可修改", TimeWindow.label(this)));
+            return;
+        }
+        final EditText input = new EditText(this);
+        input.setSingleLine(true);
+        input.setSelectAllOnFocus(true);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER);
+        input.setContentDescription(T.s("冻结前提醒提前量（分钟）"));
+        input.setHint(T.f("1–180 分钟，默认 %d 分钟", FreezeWarn.DEFAULT_MINUTES));
+        input.setText(String.valueOf(FreezeWarn.minutes(this)));
+        input.setPadding(ui.dp(20), ui.dp(8), ui.dp(20), ui.dp(8));
+        ThemeStore.excludeFont(input);
+        final AlertDialog dialog = ThemeStore.dialog(this)
+                .setTitle(T.s("提醒提前量"))
+                .setMessage(T.s("冻结前多少分钟提醒一次。"))
+                .setView(input)
+                .setNegativeButton(T.s("取消"), null)
+                .setPositiveButton(T.s("保存"), null)
+                .create();
+        dialog.setOnShowListener(shown ->
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                    int value;
+                    try {
+                        value = Integer.parseInt(input.getText().toString().trim());
+                    } catch (NumberFormatException error) {
+                        toast(T.f("请填写 %d–%d 之间的整数分钟",
+                                FreezeWarn.MIN_MINUTES, FreezeWarn.MAX_MINUTES));
+                        return;
+                    }
+                    if (value < FreezeWarn.MIN_MINUTES || value > FreezeWarn.MAX_MINUTES) {
+                        toast(T.f("请填写 %d–%d 之间的整数分钟",
+                                FreezeWarn.MIN_MINUTES, FreezeWarn.MAX_MINUTES));
+                        return;
+                    }
+                    FreezeWarn.setMinutes(this, value);
+                    dialog.dismiss();
+                    toast(T.f("将在冻结前 %d 分钟提醒", value));
+                    render();
+                }));
+        dialog.show();
+        input.requestFocus();
+        input.selectAll();
+    }
+
     private String pluginSummary() {
+        String builtIn = T.f("内置 %d / %d",
+                com.afs.guard.plugins.BuiltInPluginStore.enabledCount(this),
+                com.afs.guard.plugins.BuiltInPluginStore.plugins().size());
         int enabled = 0, total = 0;
         try {
             for (com.afs.host.plugins.PluginEntry entry
                     : com.afs.host.plugins.HostRuntime.get(this).registry().entries()) {
+                if("com.afs.plugin.usagestats".equals(entry.packageName()))continue;
                 total++;
                 if (entry.usable()) enabled++;
             }
         } catch (RuntimeException ignored) { }
-        if (total == 0) return Lang.t(this, "未安装", "Not installed");
-        return Lang.t(this, enabled + " / " + total + " 已启用",
-                enabled + " / " + total + " enabled");
+        if (total == 0) return builtIn + T.s(" · 外部未安装");
+        return builtIn + Lang.t(this, " · 外部 " + enabled + " / " + total + " 已启用",
+                " · " + enabled + " / " + total + " external enabled");
     }
 
     private View header() {
@@ -212,6 +501,7 @@ public final class SettingsActivity extends ThemedActivity {
         TextView back = new TextView(this);
         back.setText("‹  " + Lang.t(this, "返回", "Back"));
         back.setTextSize(14);
+        back.setMinHeight(ui.dp(48));
         back.setTextColor(ui.accent());
         back.setPadding(0, ui.dp(6), ui.dp(12), ui.dp(6));
         back.setOnClickListener(v -> finish());
@@ -230,23 +520,37 @@ public final class SettingsActivity extends ThemedActivity {
     }
 
     private TextView row(LinearLayout parent, String title, String value, Runnable onClick) {
+        boolean stacked=value!=null && (value.codePointCount(0,value.length())>14
+                || title.codePointCount(0,title.length())>7);
         LinearLayout line = new LinearLayout(this);
-        line.setOrientation(LinearLayout.HORIZONTAL);
+        line.setOrientation(stacked?LinearLayout.VERTICAL:LinearLayout.HORIZONTAL);
         line.setGravity(Gravity.CENTER_VERTICAL);
+        line.setMinimumHeight(ui.dp(56));
         line.setPadding(0, ui.dp(12), 0, ui.dp(12));
 
         TextView name = new TextView(this);
         name.setText(title);
         name.setTextSize(15);
         name.setTextColor(ui.text());
-        line.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+        line.addView(name, stacked?new LinearLayout.LayoutParams(-1,-2):new LinearLayout.LayoutParams(0, -2, 1f));
 
         TextView tail = new TextView(this);
         tail.setText(value == null ? "" : value);
         tail.setTextSize(13);
-        tail.setTextColor(onClick == null ? ui.text3() : ui.accent());
-        tail.setSingleLine(true);
-        line.addView(tail);
+        tail.setTextColor(ui.text2());
+        tail.setSingleLine(!stacked);
+        if(stacked){
+            LinearLayout.LayoutParams detail=new LinearLayout.LayoutParams(-1,-2);
+            detail.topMargin=ui.dp(4);line.addView(tail,detail);
+        }else{
+            tail.setMaxWidth((int)(getResources().getDisplayMetrics().widthPixels*.46f));
+            tail.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            tail.setPadding(ui.dp(12),0,0,0);line.addView(tail);
+        }
+        if(onClick!=null){
+            android.util.TypedValue ripple=new android.util.TypedValue();
+            if(getTheme().resolveAttribute(android.R.attr.selectableItemBackground,ripple,true))line.setBackgroundResource(ripple.resourceId);
+        }
 
         if (onClick != null) line.setOnClickListener(v -> onClick.run());
         parent.addView(line);
@@ -275,24 +579,9 @@ public final class SettingsActivity extends ThemedActivity {
         top.addView(state);
         line.addView(top);
 
-        TextView note = new TextView(this);
-        note.setText(why);
-        note.setTextSize(11);
-        note.setTextColor(ui.text3());
-        note.setPadding(0, ui.dp(3), 0, 0);
-        line.addView(note);
-
+        // why 保留在签名里兼容调用点，但不再渲染解释性小字。
         if (onClick != null) line.setOnClickListener(v -> onClick.run());
         parent.addView(line);
-    }
-
-    private void addNote(LinearLayout parent, String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextSize(11);
-        view.setTextColor(ui.text3());
-        view.setPadding(0, ui.dp(2), 0, ui.dp(10));
-        parent.addView(view);
     }
 
     /* ==================== 交互 ==================== */
@@ -470,7 +759,9 @@ public final class SettingsActivity extends ThemedActivity {
 
     private String themeSummary() {
         AppearanceConfig appearance = ThemeStore.load(this);
-        String skin = appearance.amap() ? T.s("简约风格") : T.s("原有风格");
+        com.afs.guard.style.RendererFactory renderer = com.afs.guard.style.StyleRegistry.find(
+                com.afs.guard.style.StyleManager.selected(this));
+        String skin = renderer != null ? renderer.displayName(this) : T.s("简约风格");
         String mode = Ui.themeName(this);
         if ("auto".equals(mode)) mode = T.s("跟随系统");
         else if ("dark".equals(mode)) mode = T.s("深色");
@@ -526,6 +817,8 @@ public final class SettingsActivity extends ThemedActivity {
     private String lanSummary() {
         if (!LanQuota.enabled(this)) return Lang.t(this, "关", "Off");
         if (!LanQuota.active(this)) return Lang.t(this, "未绑定", "Not bound");
+        int bindings = LanQuota.bindings(this).length();
+        if (bindings > 1) return T.f("%d 格共享", bindings);
         // 这一行的右边只放得下几个字：完整描述放进弹窗，否则标题会被挤成竖排。
         if (!LanQuota.fresh(this)) return Lang.t(this, "未连上电脑", "Offline");
         long remainSec = Math.max(0L, LanQuota.minutes(this) * 60L - LanQuota.total(this) / 1000L);

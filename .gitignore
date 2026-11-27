@@ -15,6 +15,13 @@ __pycache__/
 .codex-fix/
 /dist/
 /build/
+.gradle/
+local.properties
+build-compose*.log
+app/build/
+core/*/build/
+feature/*/build/
+style/*/build/
 /archive/
 /*.png
 plugins/*/build/
@@ -23,3 +30,12 @@ dpc/test/fixture-plugin/build/
 # 临时诊断包与运维指令文件
 /afs-diag.apk
 /afs-command.json
+
+# 本机 UI dump 与 JVM 崩溃日志
+/afs-cards*.xml
+/afs-taboo*.xml
+/afs-window.xml
+hs_err_pid*.log
+replay_pid*.log
+dpc/hs_err_pid*.log
+dpc/replay_pid*.log

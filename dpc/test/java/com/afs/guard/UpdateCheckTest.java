@@ -35,14 +35,14 @@ public final class UpdateCheckTest {
         eq(true, !UpdateCheck.DEFAULT_URL.isEmpty() && UpdateCheck.DEFAULT_URL.startsWith("https://"),
                 "默认更新源已配置且是 https");
 
-        String source = "https://github.com/sdgfdii/AwayFromShorts-Phone/releases/latest/download/manifest.json";
+        String source = "https://github.com/gptdds/AwayFromShorts-Phone/releases/latest/download/manifest.json";
         String manifest = "{\"version\":\"1.56.0\",\"versionCode\":2177,"
                 + "\"apk\":{\"file\":\"afs-guard.apk\",\"sha256\":\"c8ea1b\"}}";
         UpdateCheck.Release built = UpdateCheck.parse(manifest, source);
         eq("1.56.0", built.version, "manifest version");
         eq(2177L, built.versionCode, "manifest versionCode");
         eq("c8ea1b", built.sha256, "manifest sha256");
-        eq("https://github.com/sdgfdii/AwayFromShorts-Phone/releases/latest/download/afs-guard.apk",
+        eq("https://github.com/gptdds/AwayFromShorts-Phone/releases/latest/download/afs-guard.apk",
                 built.url, "相对文件名拼成下载地址");
         eq(true, built.hasDownload(), "有下载地址");
 
@@ -90,10 +90,10 @@ public final class UpdateCheckTest {
         UpdateCheck.Release multi = UpdateCheck.parse(withMirrors, source);
         eq(2, multi.mirrors.length, "mirrors 去空去重");
         eq("https://m1/afs.apk", multi.mirrors[0], "绝对地址原样保留");
-        eq("https://github.com/sdgfdii/AwayFromShorts-Phone/releases/latest/download/extra.apk",
+        eq("https://github.com/gptdds/AwayFromShorts-Phone/releases/latest/download/extra.apk",
                 multi.mirrors[1], "相对项按同目录拼");
         eq(3, multi.downloads().length, "下载候选 = 主地址 + 镜像");
-        eq("https://github.com/sdgfdii/AwayFromShorts-Phone/releases/latest/download/afs-guard.apk",
+        eq("https://github.com/gptdds/AwayFromShorts-Phone/releases/latest/download/afs-guard.apk",
                 multi.downloads()[0], "主地址排第一");
         eq(0, built.mirrors.length, "清单没有 mirrors 就是空数组");
         eq(1, built.downloads().length, "没有镜像就只有一个下载候选");

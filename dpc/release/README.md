@@ -30,3 +30,11 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File deploy.ps1 -Serial 设备序列号 -NonInteractive -AcceptDeviceOwner
 
 仅检查不会修改设备。首次无人值守部署必须显式确认管理授权。应用源代码和第三方许可证随独立源码包提供，项目采用 MIT 许可证。
+
+## 多风格源码构建
+
+完整多风格包使用 Java 17、Android SDK 34 和随源码提供的 Gradle wrapper。解压源码后，在根目录的本机 `local.properties` 写入 `sdk.dir=你的SDK路径`，执行 `gradlew.bat :app:exportComposeArtifacts` 生成开发包。源码包包含共享业务源码、插件 API、四种视觉模块与设置模块；无需复制页面或数据库。
+
+Windows 上建议使用纯英文路径或目录联接，避免 Android 原生工具对中文路径的编码限制。开发包使用本机开发签名，不能直接覆盖生产签名的现有安装。
+
+正式构建使用 `dpc/release/build-release.ps1 -Compose`，通过外部签名配置生成主 APK、维护 APK 和校验后的部署包。私有签名与 `local.properties` 不随源码包分发。手工 `dpc/build.sh` 继续用于原生兼容构建，不包含 Compose 效果页。

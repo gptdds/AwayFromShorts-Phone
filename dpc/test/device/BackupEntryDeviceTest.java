@@ -17,7 +17,7 @@ public final class BackupEntryDeviceTest extends Instrumentation {
     public void onStart(){Bundle out=new Bundle();int status=0;try{
         check(Build.MODEL.toLowerCase().contains("sdk"),"emulator required");
         open(DataManagementActivity.class,false);Thread.sleep(500);View root=page.getWindow().getDecorView();
-        for(String label:new String[]{"导出完整本地备份","目标与打卡备份","记忆备份（含图片与复习记录）","备忘录备份（含附件）"})check(text(root,T.s(label)),"central entry: "+label);
+        for(String label:new String[]{"导出整合本地备份","目标与打卡备份","记忆备份（含图片与复习记录）","备忘录备份（含附件）"})check(text(root,T.s(label)),"central entry: "+label);
         open(MemoActivity.class,false);check(!text(page.getWindow().getDecorView(),T.s("备份与恢复")),"memo duplicate removed");
         open(MemoryActivity.class,false);check(!text(page.getWindow().getDecorView(),T.s("导出备份（含图片与复习记录）")),"memory duplicate removed");
         Class<?>[] types={CheckinActivity.class,MemoryActivity.class,MemoActivity.class};String[] titles={"备份 / 恢复","记忆备份","本机备份"};

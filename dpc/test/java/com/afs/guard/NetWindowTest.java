@@ -65,6 +65,12 @@ public final class NetWindowTest {
         // ==== 方向：除了调整时段都断 ====
         ok(NetWindow.shouldCut(true, false), "enabled outside window -> cut");
         ok(!NetWindow.shouldCut(true, true), "enabled inside window -> released");
+        ok(NetWindow.shouldCut(true, true, true), "learning hold cuts even inside window");
+        ok(!NetWindow.shouldCut(false, true, true), "disabled network still stays off");
+        eq(open, NetWindow.resolvedStart(true, open, 60), "follow uses freeze start");
+        eq(close, NetWindow.resolvedEnd(true, close, 120), "follow uses freeze end");
+        eq(60, NetWindow.resolvedStart(false, open, 60), "custom uses own start");
+        eq(120, NetWindow.resolvedEnd(false, close, 120), "custom uses own end");
         ok(!NetWindow.shouldCut(false, false), "disabled outside window -> nothing");
         ok(!NetWindow.shouldCut(false, true), "disabled inside window -> nothing");
 

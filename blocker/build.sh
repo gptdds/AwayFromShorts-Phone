@@ -42,6 +42,20 @@ D8="$(tool d8)"
 ZIPALIGN="$(tool zipalign)"
 APKSIGNER="$(tool apksigner)"
 
+# Windows 上 python3/python 常指向应用商店占位程序（...\WindowsApps\python.exe），
+# 执行即以 49 退出、什么都不干，会让打包步骤静默失败。逐个候选挑真能跑的解释器。
+pick_python() {
+  for cand in ${AFS_PYTHON:-} "$(command -v python || true)" "$(command -v python3 || true)" \
+              "$HOME"/.workbuddy/binaries/python/versions/*/python; do
+    [ -n "$cand" ] || continue
+    case "$cand" in *WindowsApps/python*) continue ;; esac
+    [ -x "$cand" ] || continue
+    printf '%s' "$cand"
+    return 0
+  done
+  return 1
+}
+
 if [ -z "${JAVA_HOME:-}" ]; then
   JAVA_HOME="$(dirname "$(dirname "$(command -v javac)")")"
   export JAVA_HOME
@@ -52,6 +66,11 @@ JAR="$JAVA_HOME/bin/jar.exe"
 OUT="build"
 rm -rf "$OUT"
 mkdir -p "$OUT/flat" "$OUT/gen" "$OUT/classes" "$OUT/dex"
+
+# Keep the accessibility package aligned with the Device Owner build.
+# Both values can be overridden by the release pipeline.
+VERSION_CODE="${AFS_VERSION_CODE:-2417}"
+VERSION_NAME="${AFS_VERSION_NAME:-1.91.92}"
 
 # ---------- 1. 编译资源 ----------
 echo "[1/6] aapt2 compile"
@@ -66,18 +85,24 @@ echo "[2/6] aapt2 link"
   --java "$OUT/gen" \
   --min-sdk-version 24 \
   --target-sdk-version 34 \
-  --version-code 1 \
-  --version-name 1.0 \
+  --version-code "$VERSION_CODE" \
+  --version-name "$VERSION_NAME" \
   "$OUT"/flat/*.flat
 
 # ---------- 3. 编译 Java ----------
 echo "[3/6] javac"
 LIBS="$(ls libs/*.jar | tr '\n' ';' | sed 's/;$//')"
 CP="$ANDROID_JAR;$LIBS"
-find java "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
-javac -encoding UTF-8 -nowarn -source 8 -target 8 \
-  -bootclasspath "$ANDROID_JAR" -classpath "$CP" \
-  -d "$OUT/classes" @"$OUT/sources.txt" 2>&1 | grep -v '^warning:' || true
+find java ../core/rules/src/main/java "$OUT/gen" -name '*.java' > "$OUT/sources.txt"
+if ! javac -encoding UTF-8 -nowarn --release 8 \
+  -classpath "$CP" \
+  -d "$OUT/classes" @"$OUT/sources.txt" 2> "$OUT/javac.log"; then
+  grep -av '^warning:' "$OUT/javac.log" >&2 || true
+  rm -rf "$OUT/classes"
+  echo "javac 失败，停止构建。" >&2
+  exit 1
+fi
+grep -av '^warning:' "$OUT/javac.log" || true
 
 # ---------- 4. dex ----------
 echo "[4/6] d8"
@@ -91,8 +116,12 @@ cp "$OUT/base.apk" "$OUT/unsigned.apk"
 if command -v zip >/dev/null 2>&1; then
   ( cd "$OUT" && zip -q -j unsigned.apk dex/classes.dex )
 else
-  PY="${AFS_PYTHON:-$(command -v python3 || command -v python || true)}"
-  [ -x "$PY" ] || PY="$(command -v python3 || command -v python)"
+  PY="$(pick_python || true)"
+  if [ -z "$PY" ] || [ ! -x "$PY" ]; then
+    echo "没有 zip 也没有可用的 python，无法把 classes.dex 塞进 APK。" >&2
+    echo "装 python 或用 AFS_PYTHON=/path/to/python 指定。" >&2
+    exit 1
+  fi
   "$PY" - "$OUT/unsigned.apk" "$OUT/dex/classes.dex" <<'PYEOF'
 import sys, zipfile
 apk, dex = sys.argv[1], sys.argv[2]

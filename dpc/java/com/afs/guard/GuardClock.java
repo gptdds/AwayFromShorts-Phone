@@ -6,6 +6,8 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import java.util.Calendar;
 import java.util.TimeZone;
+import com.afs.guard.style.BundledStyles;
+import com.afs.guard.data.AfsDatabase;
 
 /** Android 7/8 cannot prohibit timezone edits. Their schedules use a pinned zone. */
 public final class GuardClock extends Application {
@@ -19,6 +21,7 @@ public final class GuardClock extends Application {
         try{T.refresh(this);}catch(RuntimeException ignored){}
         LocalBackup.startup(this);
         pin(this);
+        AfsDatabase.runAsync(() -> LegacyDatabaseMigration.run(GuardClock.this));
         // 中文用户占绝大多数，翻译表对他完全没用 —— 丢后台；
         // 选了 English 的必须先把表读进来，否则第一帧会先闪一下中文。
         boolean english = false;
@@ -38,6 +41,11 @@ public final class GuardClock extends Application {
             try{PageRuleStore.seedBuiltins(GuardClock.this);}catch(RuntimeException ignored){}
         });
         Startup.prewarm(this);
+        registerStyles();
+    }
+    /** Open registry; core code never hard-codes a specific style beyond the fallback id. */
+    private void registerStyles(){
+        BundledStyles.register();
     }
 
     /** 后台跑一件"失败了也不该影响启动"的事。 */

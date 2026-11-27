@@ -12,12 +12,13 @@ final class DailyQuotaStore {
     private static String signature="";
     private static volatile boolean writeFailed;
     private static SharedPreferences prefs(Context c){return c.getSharedPreferences(SP,0);}
-    private static DailyQuotaData load(Context c,long now){SharedPreferences p=prefs(c);return new DailyQuotaData(p.getString("config","{}"),p.getString("usage",p.contains("config")?"{missing":"{}"),now,DayBoundary.hour(c));}
+    private static DailyQuotaData load(Context c,long now){SharedPreferences p=prefs(c);return new DailyQuotaData(p.getString("config","{}"),p.getString("usage",p.contains("config")?"{missing":"{}"),now,DayBoundary.hour(c),DayBoundary.minute(c));}
     /** 只读快照的记忆：见 {@link #snapshot(Context)}。 */
     private static final Object SNAPSHOT_LOCK=new Object();
     private static String cachedConfigRaw,cachedUsageRaw;
     private static DailyQuotaData cachedSnapshot;
     private static int cachedResetHour=-1;
+    private static int cachedResetMinute=-1;
     /**
      * 只读快照（返回的对象禁止修改；写路径走 {@link #load}）。
      *
@@ -32,40 +33,14 @@ final class DailyQuotaStore {
         String config=(String)(values.containsKey("config")?values.get("config"):"{}");
         String usage=(String)(values.containsKey("usage")?values.get("usage"):values.containsKey("config")?"{missing":"{}");
         int resetHour=DayBoundary.hour(c);
+        int resetMinute=DayBoundary.minute(c);
         synchronized(SNAPSHOT_LOCK){
-            if(cachedSnapshot==null||cachedResetHour!=resetHour||!config.equals(cachedConfigRaw)||!usage.equals(cachedUsageRaw)){
-                DailyQuotaData next=new DailyQuotaData(config,usage,GuardClock.now(c).getTimeInMillis(),resetHour);
+            if(cachedSnapshot==null||cachedResetHour!=resetHour||cachedResetMinute!=resetMinute||!config.equals(cachedConfigRaw)||!usage.equals(cachedUsageRaw)){
+                DailyQuotaData next=new DailyQuotaData(config,usage,GuardClock.now(c).getTimeInMillis(),resetHour,resetMinute);
+                cachedResetMinute=resetMinute;
                 cachedResetHour=resetHour;cachedSnapshot=next;cachedConfigRaw=config;cachedUsageRaw=usage;
             }
             return cachedSnapshot;
-        }
-    }
-    /**
-     * 把已经卸载的应用从额度格子里清理掉（连同账本里的已用时间）。
-     *
-     * 在额度节拍（refresh）和 Guard.apply 里顺手跑：额度只按包名存，卸载不会触发移除，
-     * 共享格子里就会一直挂着一只已卸载的应用、还占着当天那份额度。清理后共享合计随之变小。
-     * 没变化（removed==0）就不写盘，避免每个节拍都 commit 一次。
-     */
-    static synchronized void pruneUninstalled(Context c){
-        try{
-            SharedPreferences p=prefs(c);
-            if(!p.contains("config"))return;
-            Set<String> installed=new LinkedHashSet<>();
-            android.content.pm.PackageManager pm=c.getPackageManager();
-            // 走 Guard.installed：它认得出「被隐藏」和「已卸载」，隐藏兜底冻上的应用不会被当成卸载清掉。
-            for(String pkg:packages(c))if(Guard.installed(pm,pkg))installed.add(pkg);
-            if(installed.size()==packages(c).size())return;   // 全都在装 → 不用清理
-            DailyQuotaData d=load(c,GuardClock.now(c).getTimeInMillis());
-            JSONObject result=DailyQuotaData.pruneUninstalled(d.config,d.usage,installed);
-            int removed=result.optInt("removed",0);
-            if(removed<=0)return;
-            if(!p.edit().putString("config",result.optJSONObject("config").toString())
-                    .putString("usage",result.optJSONObject("usage").toString()).commit())
-                throw new IllegalStateException(T.s("每日限额未能保存"));
-            refreshed=0;signature="";
-        }catch(RuntimeException error){
-            android.util.Log.w("AFS","prune uninstalled quota apps failed: "+error);
         }
     }
     static synchronized void refresh(Context c){refresh(c,false);}
@@ -76,7 +51,7 @@ final class DailyQuotaStore {
             if(!d.backgroundPackages().isEmpty())spans=AppUsageQuota.effective(spans,AppUsageQuota.fgs(c,now),d.backgroundPackages());
         }catch(RuntimeException error){reliable=false;}
         // 全天推进：调整时段只管「能不能改设置」，不参与统计。
-        d.advance(now,spans,reliable,RuleStore.all(c),DayBoundary.hour(c));if(!prefs(c).edit().putString("usage",d.usage.toString()).commit()){writeFailed=true;throw new IllegalStateException(T.s("每日限额用量未能保存"));}writeFailed=false;refreshed=now;
+        d.advance(now,spans,reliable,RuleStore.all(c),DayBoundary.hour(c),DayBoundary.minute(c));if(!prefs(c).edit().putString("usage",d.usage.toString()).commit()){writeFailed=true;throw new IllegalStateException(T.s("每日限额用量未能保存"));}writeFailed=false;refreshed=now;
     }
 
     private static final String K_RECOUNT="recount_full_day_v1";
@@ -91,12 +66,11 @@ final class DailyQuotaStore {
     private static void recountTodayOnce(Context c,DailyQuotaData d,long now){
         SharedPreferences p=prefs(c);
         if(p.getBoolean(K_RECOUNT,false)||!AppUsageQuota.permission(c))return;
-        int hour=DayBoundary.hour(c);
-        if(!DayBoundary.key(now,hour).equals(d.usage.optString("date")))return;   // 账本还没切到今天，下次再说
+        if(!DayBoundary.key(c,now).equals(d.usage.optString("date")))return;   // 账本还没切到今天，下次再说
         try{
             DailyQuotaData.put(d.usage,"targets",new JSONObject());
-            DailyQuotaData.put(d.usage,"lastAt",DayBoundary.startMs(now,hour));
-            DailyQuotaData.put(d.usage,"since",DayBoundary.startMs(now,hour));
+            DailyQuotaData.put(d.usage,"lastAt",DayBoundary.startMs(c,now));
+            DailyQuotaData.put(d.usage,"since",DayBoundary.startMs(c,now));
             d.usage.remove("error");
             d.usage.remove("unavailable");
         }catch(RuntimeException ignored){return;}
@@ -104,11 +78,12 @@ final class DailyQuotaStore {
         if(!p.edit().putString("usage",d.usage.toString()).commit())return;
         p.edit().putBoolean(K_RECOUNT,true).apply();
     }
-    static synchronized void save(Context c,JSONObject candidate){Calendar now=GuardClock.now(c);DailyQuotaData.validate(candidate);if(new DailyQuotaData(candidate.toString(),"{}",now.getTimeInMillis()).packages().contains(c.getPackageName()))throw new IllegalArgumentException(T.s("不能限制守卫自身"));
+    static synchronized void save(Context c,JSONObject candidate){Calendar now=GuardClock.now(c);DailyQuotaData.normalizeOrGroups(candidate);DailyQuotaData.validate(candidate);if(new DailyQuotaData(candidate.toString(),"{}",now.getTimeInMillis()).packages().contains(c.getPackageName()))throw new IllegalArgumentException(T.s("不能限制守卫自身"));
         refresh(c,true);DailyQuotaData current=load(c,now.getTimeInMillis());
         // 调整时段外只放「只加不减」的改动：补额度随时可以，把自己放出来得等时段
         if(!DailyQuotaData.editable(now,TimeWindow.start(c),TimeWindow.end(c))&&!DailyQuotaData.additive(current.config,candidate))throw new IllegalStateException(T.f("这个改动要减少额度，只在调整时段 %s 内开放",TimeWindow.label(c)));
-        if(!prefs(c).edit().putString("config",candidate.toString()).putString("usage",current.usage.toString()).commit())throw new IllegalStateException(T.s("每日限额未能保存"));refreshed=0;signature="";
+        current.checkpoint(candidate,GuardClock.now(c).getTimeInMillis());
+        if(!prefs(c).edit().putString("config",candidate.toString()).putString("usage",current.usage.toString()).commit())throw new IllegalStateException(T.s("每日限额未能保存"));refreshed=0;signature="";StudyGate.invalidate(c);
     }
     static synchronized void beforeScheduleChange(Context c){if(active(c))refresh(c,true);}
     /**
@@ -143,6 +118,38 @@ final class DailyQuotaStore {
         }catch(Exception error){
             android.util.Log.w("AFS","sync shared quota minutes failed: "+error);
         }
+    }
+
+    /**
+     * 禁忌卡认领或手动按钮的限额惩罚：直接把已用时间记进当天账本。
+     *
+     * 不走 {@link #save}：那条路会按「减少额度」拦截，而这里惩罚的是已用时间，
+     * 不是用户改配置。每个额度格子只写第一个成员一次，避免共享格子重复扣。
+     */
+    static synchronized int addTabooQuotaPenalty(Context c,int minutes){
+        if(minutes<=0)return 0;
+        long now=GuardClock.now(c).getTimeInMillis();
+        DailyQuotaData data=load(c,now);
+        String today=DayBoundary.key(c,now);
+        if(!today.equals(data.usage.optString("date"))){
+            // 跨额度日后先让正常刷新把当天账本建好，避免惩罚写进昨天的 usage。
+            refresh(c,true);
+            data=load(c,now);
+            if(!today.equals(data.usage.optString("date"))){
+                if(data.groups().length()==0)return 0;
+                throw new IllegalStateException(T.s("额度日切换尚未完成，请稍后再试"));
+            }
+        }
+        if(data.usage.optBoolean("unavailable")||!data.usage.optString("error").isEmpty())
+            throw new IllegalStateException(T.s("每日限额用量暂不可读，稍后再试"));
+        int changed=DailyQuotaData.addUsedPenalty(data.config,data.usage,minutes);
+        if(changed==0)return 0;
+        if(!prefs(c).edit().putString("usage",data.usage.toString()).commit()){
+            writeFailed=true;
+            throw new IllegalStateException(T.s("每日限额用量未能保存"));
+        }
+        writeFailed=false;refreshed=0;signature="";StudyGate.invalidate(c);
+        return changed;
     }
 
     /**
@@ -191,6 +198,10 @@ final class DailyQuotaStore {
     static boolean editable(Context c){return DailyQuotaData.editable(GuardClock.now(c),TimeWindow.start(c),TimeWindow.end(c));}
     static Set<String> packages(Context c){return snapshot(c).packages();}
     static boolean active(Context c){DailyQuotaData d=snapshot(c);return d.enabled()&&d.groups().length()>0;}
+    static boolean learningLinked(Context c){
+        try{DailyQuotaData d=snapshot(c);return LearningBindings.targetQuota(c)&&d.enabled()&&d.groups().length()>0&&d.learningLinked();}
+        catch(RuntimeException error){return false;}
+    }
     static boolean hasAllowance(Context c,String pkg){DailyQuotaData d=snapshot(c);return d.enabled()&&d.group(pkg)!=null;}
     /** 先放开权限：没授权也能配额度，但判不出用量就不冻结；授权后立刻恢复计时与冻结。 */
     /** 超限判定：只看额度本身和应用自身冻结时段，与全局调整时段无关；额度用完当场就冻。 */
@@ -198,32 +209,81 @@ final class DailyQuotaStore {
         if(!AppUsageQuota.permission(c))return false;
         DailyQuotaData d=snapshot(c);Rule rule=RuleStore.all(c).get(pkg);JSONObject group=d.group(pkg);
         if(group==null||!d.enabled())return false;
+        Calendar clock=GuardClock.now(c);long now=clock.getTimeInMillis();
+        boolean quotaPaused=FreezeWeekdayPolicy.pausesQuota(c,clock);
+        boolean orPaused=FreezeWeekdayPolicy.pausesOrSet(c,clock);
         // 「共享格子」＝这一格有多个成员（一个格子放多个应用就是它们共用一份额度）。
         // 注意：本机的多应用格子也算共享，不能只看跨设备那条——之前只认 LanQuota.isShared，
         // 导致「Chrome 这种本机多应用格子」仍被成员自己的放行时段压制（nextplayer 的案例）。
-        JSONArray members=group.optJSONArray("apps");
-        boolean shared=members!=null&&members.length()>1;
+        boolean shared=DailyQuotaData.sharedCell(group);
+        // 共享格子选中的星期几：组内应用整天冻结，不看额度用没用完；其余天按原额度逻辑。
+        boolean freezeToday=shared&&DailyQuotaData.freezeToday(group,clock);
         boolean lanShared=LanQuota.isShared(c,group.optString("id"));
         // 本机账本已经写不出来 / 损坏 → 保护性冻结（与时段无关）。
         boolean broken=writeFailed||d.usage.optBoolean("unavailable");
-        boolean localExceeded=broken||d.exceeded(pkg);
+        boolean localExceeded=broken||freezeToday||d.groupExhausted(group);
         // 共享格子优先于自身冻结时段：只要共享额度（含本机这一份）满了就冻，
         // 不看应用此刻是不是在自己的放行时段里；跨设备格子再把电脑那半边的合计算进来。
-        boolean lanExhausted=lanShared&&LanQuota.exhausted(c);
-        boolean inScope=DailyQuotaData.inScope(rule,GuardClock.now(c).getTimeInMillis());
-        return DailyQuotaData.exceededBy(shared,localExceeded,inScope,lanExhausted);
+        boolean lanExhausted=lanShared&&LanQuota.exhausted(c,group.optString("id"));
+        boolean inScope=DailyQuotaData.inScope(rule,now);
+        boolean quotaExceeded=DailyQuotaData.exceededBy(shared,localExceeded,inScope,lanExhausted);
+        boolean orExceeded=DailyQuotaData.hasOrGroup(group)&&!d.groupExhausted(group)
+                &&d.orFrozenByOther(group,now);
+        return DailyQuotaData.enforced(quotaExceeded,orExceeded,quotaPaused,orPaused);
+    }
+    /** Only the mutual-exclusion cause; normal quota exhaustion keeps its existing exit behavior. */
+    static boolean orFrozenByOther(Context c,String pkg,long now){
+        if(pkg==null||!AppUsageQuota.permission(c))return false;
+        Calendar clock=GuardClock.now(c);clock.setTimeInMillis(now);
+        if(FreezeWeekdayPolicy.pausesOrSet(c,clock))return false;
+        DailyQuotaData d=snapshot(c);JSONObject group=d.group(pkg);
+        return d.enabled()&&group!=null&&DailyQuotaData.hasOrGroup(group)
+                &&!d.groupExhausted(group)&&d.orFrozenByOther(group,now);
+    }
+    static boolean orReminder(Context c,String pkg,long now){
+        Calendar clock=GuardClock.now(c);clock.setTimeInMillis(now);
+        if(FreezeWeekdayPolicy.pausesOrSet(c,clock))return false;
+        DailyQuotaData d=snapshot(c);JSONObject group=d.group(pkg);
+        return d.enabled()&&group!=null&&DailyQuotaData.hasOrGroup(group)
+                &&!d.groupExhausted(group)&&d.orReminderDue(group,now);
+    }
+    static boolean orForceExit(Context c,String pkg,long now){
+        return orReminder(c,pkg,now);
+    }
+    /** 原子地占用当天唯一一次提醒名额；返回真才允许弹出提醒。 */
+    static synchronized boolean claimOrReminder(Context c,String pkg,long now){
+        if(pkg==null||!AppUsageQuota.permission(c))return false;
+        Calendar clock=GuardClock.now(c);clock.setTimeInMillis(now);
+        if(FreezeWeekdayPolicy.pausesOrSet(c,clock))return false;
+        DailyQuotaData d=load(c,now);JSONObject group=d.group(pkg);
+        if(!d.enabled()||group==null||!DailyQuotaData.hasOrGroup(group)
+                ||d.groupExhausted(group)||!d.orReminderDue(group,now))return false;
+        d.markOrReminded(group.optString("orGroup",""),now);
+        if(!prefs(c).edit().putString("usage",d.usage.toString()).commit())
+            throw new IllegalStateException(T.s("每日限额用量未能保存"));
+        refreshed=0;signature="";
+        return true;
+    }
+    static synchronized boolean claimOrForceExit(Context c,String pkg,long now){
+        return claimOrReminder(c,pkg,now);
     }
     static boolean enforcementChanged(Context c){try{refresh(c);}catch(IllegalStateException error){if(!writeFailed)throw error;}StringBuilder out=new StringBuilder();for(String pkg:packages(c))if(exceeded(c,pkg))out.append(pkg).append(';');synchronized(DailyQuotaStore.class){String next=out.toString();boolean changed=!next.equals(signature);signature=next;return changed;}}
-    static String status(Context c,String pkg){DailyQuotaData d=snapshot(c);JSONObject g=d.group(pkg);Rule rule=RuleStore.all(c).get(pkg);if(g==null)return "";return (rule==null||FreezeSlotStore.unassigned(rule)?T.s("全天限额 · "):T.s("所绑时段限额 · "))+description(c,d,g);}
+    static String status(Context c,String pkg){DailyQuotaData d=snapshot(c);JSONObject g=d.group(pkg);Rule rule=RuleStore.all(c).get(pkg);if(g==null)return "";return (DailyQuotaData.allDay(g,rule)?T.s("全天限额 · "):T.s("所绑时段限额 · "))+description(c,d,g);}
     static boolean readable(Context c,DailyQuotaData d){return !writeFailed&&AppUsageQuota.permission(c)&&!d.usage.optBoolean("unavailable")&&d.usage.optString("error").isEmpty();}
-    static String description(Context c,DailyQuotaData d,JSONObject g){if(!d.enabled())return T.s("每日限额已暂停");if(!AppUsageQuota.permission(c))return T.s("未授予使用情况权限，暂不计时");if(writeFailed||d.usage.optBoolean("unavailable")||!d.usage.optString("error").isEmpty())return T.s("用量暂不可读，保护性冻结");
-        if(LanQuota.isShared(c,g.optString("id"))){
+    static String description(Context c,DailyQuotaData d,JSONObject g){if(!d.enabled())return T.s("每日限额已暂停");if(FreezeWeekdayPolicy.pausesQuota(c,GuardClock.now(c)))return T.s("今天按星期暂停 · 用量继续记录");if(!AppUsageQuota.permission(c))return T.s("未授予使用情况权限，暂不计时");if(writeFailed||d.usage.optBoolean("unavailable")||!d.usage.optString("error").isEmpty())return T.s("用量暂不可读，保护性冻结"); 
+        if(DailyQuotaData.freezeToday(g,GuardClock.now(c)))return T.s("星期冻结 · 今天整天冻结");
+        if(DailyQuotaData.hasOrGroup(g)&&!d.groupExhausted(g)&&d.orFrozenByOther(g,GuardClock.now(c).getTimeInMillis()))
+            return d.orRemindedAt(g.optString("orGroup",""))>0L
+                    ?T.s("或集互斥 · 今天已提醒一次，超过 5 分钟后其他格冻结")
+                    :T.s("或集互斥 · 超过 5 分钟，另一格已冻结");
+        String groupId=g.optString("id");
+        if(LanQuota.isShared(c,groupId)){
             // 共享组不能只报本机用量 —— 用户看到的“剩 30 分钟”必须和两台设备都能用的一致。
-            if(!LanQuota.fresh(c))return T.s("跨设备额度 · 未连上电脑，暂按本机计");
-            long total=LanQuota.total(c),limit=LanQuota.minutes(c)*60000L;
+            if(!LanQuota.fresh(c,groupId))return T.s("跨设备额度 · 未连上电脑，暂按本机计");
+            long total=LanQuota.total(c,groupId),limit=LanQuota.minutes(c,groupId)*60000L;
             // 局域网断了、数字来自 Gist 时说清楚：这是分钟级的旧数据，偏乐观。
-            String head="gist".equals(LanQuota.source(c))?T.s("离线估算 · "):T.s("跨设备 · ");
-            return head+String.format(Locale.CHINA,T.s("已用 %.1f / %d 分钟（电脑 %.1f + 手机 %.1f）"),total/60000.0,LanQuota.minutes(c),LanQuota.pcUsed(c)/60000.0,LanQuota.phoneUsed(c)/60000.0);
+            String head="gist".equals(LanQuota.source(c,groupId))?T.s("离线估算 · "):T.s("跨设备 · ");
+            return head+String.format(Locale.CHINA,T.s("已用 %.1f / %d 分钟（电脑 %.1f + 手机 %.1f）"),total/60000.0,LanQuota.minutes(c,groupId),LanQuota.pcUsed(c,groupId)/60000.0,LanQuota.phoneUsed(c,groupId)/60000.0);
         }
         long used=d.used(g),limit=g.optInt("minutes")*60000L;return String.format(Locale.CHINA,T.s("已用 %.1f / %d 分钟 · 剩余 %.1f 分钟"),used/60000.0,g.optInt("minutes"),Math.max(0,limit-used)/60000.0);}
 }

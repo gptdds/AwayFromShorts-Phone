@@ -24,11 +24,13 @@ final class LineIcon extends View {
     private final RectF rect = new RectF();
     private final String glyph;
     private int color;
+    private final String style;
 
     LineIcon(Context context, String glyph, int color) {
         super(context);
         this.glyph = glyph == null ? "" : glyph;
         this.color = color;
+        this.style=com.afs.guard.style.StyleManager.selected(context);
         paint.setStrokeCap(Paint.Cap.ROUND);
         paint.setStrokeJoin(Paint.Join.ROUND);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -65,7 +67,8 @@ final class LineIcon extends View {
         canvas.scale(size / 24f, size / 24f);
         paint.setColor(color);
         // 画布放大到 size/24，把「1.6dp 像素」换算回 24 格里的宽度
-        float strokePx = STROKE_DP * getResources().getDisplayMetrics().density;
+        float weight=StyleMood.glass(style)?1.15f:StyleMood.spatial(style)?2.6f:StyleMood.fluid(style)?1.8f:STROKE_DP;
+        float strokePx = weight * getResources().getDisplayMetrics().density;
         paint.setStrokeWidth(strokePx * 24f / size);
         paint.setStyle(Paint.Style.STROKE);
         drawGlyph(canvas);
@@ -137,15 +140,7 @@ final class LineIcon extends View {
                 paint.setStyle(Paint.Style.STROKE);
                 break;
             case "⚙":
-                c.drawCircle(12, 12, 3.1f, paint);
-                c.drawCircle(12, 12, 7.4f, paint);
-                for (int i = 0; i < 6; i++) {
-                    double a = Math.PI / 3 * i;
-                    float x1 = (float) (12 + Math.cos(a) * 7.4f), y1 = (float) (12 + Math.sin(a) * 7.4f);
-                    float x2 = (float) (12 + Math.cos(a) * 9.2f), y2 = (float) (12 + Math.sin(a) * 9.2f);
-                    path.moveTo(x1, y1); path.lineTo(x2, y2);
-                }
-                c.drawPath(path, paint);
+                GearIcon.drawGear(c,paint);
                 break;
             case "◷":
             case "◔":

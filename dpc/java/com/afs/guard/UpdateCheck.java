@@ -23,7 +23,7 @@ public final class UpdateCheck {
 
     /** 更新源：发布页 latest 的 manifest.json，随每次发版自动指向最新一版。 */
     public static final String DEFAULT_URL =
-            "https://github.com/sdgfdii/AwayFromShorts-Phone/releases/latest/download/manifest.json";
+            "https://github.com/gptdds/AwayFromShorts-Phone/releases/latest/download/manifest.json";
 
     /**
      * 镜像源：国内直连 github.com 经常要等到超时才失败，这里再放几条走第三方加速的同名清单。
@@ -33,8 +33,8 @@ public final class UpdateCheck {
      * 官方源永远排第一：能用官方就不吃第三方。</p>
      */
     public static final String[] MIRRORS = {
-            "https://gh-proxy.com/https://github.com/sdgfdii/AwayFromShorts-Phone/releases/latest/download/manifest.json",
-            "https://gh.nxnow.top/https://github.com/sdgfdii/AwayFromShorts-Phone/releases/latest/download/manifest.json",
+            "https://gh-proxy.com/https://github.com/gptdds/AwayFromShorts-Phone/releases/latest/download/manifest.json",
+            "https://gh.nxnow.top/https://github.com/gptdds/AwayFromShorts-Phone/releases/latest/download/manifest.json",
     };
 
     /**

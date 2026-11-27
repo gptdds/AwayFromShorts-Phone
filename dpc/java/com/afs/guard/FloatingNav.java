@@ -7,7 +7,6 @@ import android.graphics.Canvas;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.os.Build;
@@ -26,14 +25,21 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-/** Three live glass layers, velocity-preserving springs, and release-to-select navigation. */
+import com.afs.guard.plugins.BuiltInPluginStore;
+import com.afs.guard.plugins.DockPages;
+import com.afs.style.api.NavigationPainter;
+import com.afs.guard.style.DesignTokens;
+import com.afs.guard.style.EffectQuality;
+import com.afs.guard.style.EffectQualityManager;
+import com.afs.guard.style.StyleManager;
+import com.afs.guard.style.StyleRegistry;
+
+/** Quiet native navigation with consistent outline icons and release-to-select behavior. */
 public final class FloatingNav extends FrameLayout {
     // 系统背景模糊覆盖整个窗口；窗口边界须与胶囊重合，不能留额外的模糊边带。
     static final int SHADOW_ROOM_DP = 0;
-    private static final int[] ORDER = {3,0,4,1,2};
-    private static final String[] LABELS = {"记忆", "刷题", "冻结", "打卡", "守卫"};
-    private static final Class<?>[] PAGES = {MemoryActivity.class, QuizActivity.class,
-            FreezeBoardActivity.class, CheckinActivity.class, MainActivity.class};
+    private static final String[] LABELS = DockPages.labels();
+    private static final Class<?>[] PAGES = DockPages.activities();
     private static int transitionFrom=-1, transitionTo=-1;
     private static long transitionAt, switchingUntil;
     private static long transitionToken,consumedTransition;
@@ -48,7 +54,17 @@ public final class FloatingNav extends FrameLayout {
     private final Runnable motionChanged=()->{
         if(!MotionPolicy.navigation(getContext()))finishContent();
         if(!motion())resetDock();
+        refreshNavigationStyle();
     };
+    private final Runnable navigationStyleChanged=this::refreshNavigationStyle;
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener visualChanged=(prefs,key)->{
+        if(StyleManager.KEY.equals(key)||"effect_quality".equals(key))refreshNavigationStyle();
+    };
+    private NavigationPainter navigationPainter;
+    private String navigationStyle;
+    private EffectQuality navigationQuality;
+    private boolean navigationAttempted;
+    private DesignTokens navigationTokens;
     private void resetDock(){
         Choreographer.getInstance().removeFrameCallback(frame);framePosted=false;frameTime=0;
         pressing=false;dragging=false;pointer=-1;if(velocity!=null){velocity.recycle();velocity=null;}
@@ -60,6 +76,8 @@ public final class FloatingNav extends FrameLayout {
     private final Ui ui;
     private final AppearanceConfig appearance;
     private final View source;
+    private final int[] order;
+    private long pluginRevision;
     private NavContentInsets contentInsets;
     private final FrameLayout host, panel;
     private final LinearLayout tabs;
@@ -69,10 +87,10 @@ public final class FloatingNav extends FrameLayout {
     /** 界面语言下的标签（默认中文）；图标 glyph 仍用 LABELS，不跟着翻译。构造器里赋值。 */
     private final String[] texts;
     private final int selected;
-    private final DockSpring position=new DockSpring(0,300,.55);
-    private final DockSpring lift=new DockSpring(0,576,.9);
-    private final DockSpring swell=new DockSpring(0,311,.593);
-    private final DockSpring jelly=new DockSpring(0,100,.4);
+    private final DockSpring position=new DockSpring(0,300,1);
+    private final DockSpring lift=new DockSpring(0,576,1);
+    private final DockSpring swell=new DockSpring(0,311,1);
+    private final DockSpring jelly=new DockSpring(0,100,1);
     private final DockSpring pull=new DockSpring(0,400,.8);
     private final DockSpring glow=new DockSpring(0,576,1);
     private final RectF lensRect=new RectF(), barOnWindow=new RectF(), lensOnWindow=new RectF();
@@ -83,6 +101,7 @@ public final class FloatingNav extends FrameLayout {
     private float pitch, lensWidth, firstCenter, pressX, lightX, pullPixels;
     private VelocityTracker velocity;
     private long frameTime, playedTransition;
+    private long rippleAt;private float rippleX;
     private final ViewTreeObserver.OnPreDrawListener beforeDraw=()->{playTransition();renderGlass();return true;};
     private final Choreographer.FrameCallback frame=this::step;
 
@@ -144,6 +163,7 @@ public final class FloatingNav extends FrameLayout {
 
     private FloatingNav(Activity activity,View source,FrameLayout host,int selected,ImageView veil) {
         super(activity);this.activity=activity;this.source=source;this.host=host;this.selected=selected;this.snapshotView=veil;ui=new Ui(activity);appearance=ThemeStore.load(activity);this.texts=Lang.nav(activity);
+        order=DockPages.navigation(activity);pluginRevision=BuiltInPluginStore.revision(activity);
         setClipChildren(false);setClipToPadding(false);
         panel=new FrameLayout(activity);panel.setClipChildren(false);panel.setClipToPadding(false);
         LayoutParams panelLp=new LayoutParams(-1,ui.dp(62));
@@ -152,7 +172,7 @@ public final class FloatingNav extends FrameLayout {
         material=new Material();panel.addView(material,new LayoutParams(-1,-1));
         tabs=new LinearLayout(activity);tabs.setClipChildren(false);tabs.setClipToPadding(false);
         panel.addView(tabs,new LayoutParams(-1,-1));
-        for(int index:ORDER) {
+        for(int index:order) {
             LinearLayout tab=new LinearLayout(activity);
             tab.setGravity(Gravity.CENTER);tab.setOrientation(LinearLayout.VERTICAL);
             tab.setContentDescription(texts[index]);tab.setFocusable(true);
@@ -176,16 +196,48 @@ public final class FloatingNav extends FrameLayout {
 
     }
 
-    private static int slotOf(int page) {for(int i=0;i<ORDER.length;i++)if(ORDER[i]==page)return i;return -1;}
+    private int slotOf(int page) {for(int i=0;i<order.length;i++)if(order[i]==page)return i;return -1;}
     private static float clamp(float v,float lo,float hi) {return Math.max(lo,Math.min(hi,v));}
     private float value(DockSpring s) {return (float)s.value;}
-    private boolean motion() { return MotionPolicy.enabled(getContext()); }
+    private boolean motion() { return MotionPolicy.enabled(getContext())&&EffectQualityManager.resolve(getContext()).allowMotion(); }
+    private void releaseNavigationPainter(){
+        NavigationPainter old=navigationPainter;
+        navigationPainter=null;navigationStyle=null;navigationQuality=null;navigationAttempted=false;
+        if(old!=null)try{old.release();}catch(RuntimeException|LinkageError error){android.util.Log.w("AFSStyle","Navigation cleanup failed",error);}
+    }
+    private void refreshNavigationStyle(){
+        if(!StyleManager.selected(getContext()).equals(navigationStyle)||EffectQualityManager.resolve(getContext())!=navigationQuality)
+            releaseNavigationPainter();
+        if(!motion()){finishContent();resetDock();}
+        material.invalidate();
+    }
+    private boolean drawNavigationStyle(Canvas canvas,RectF bounds){
+        if(!glassVisible)return false;
+        String id=StyleManager.selected(getContext());EffectQuality quality=EffectQualityManager.resolve(getContext());
+        if(!id.equals(navigationStyle)||quality!=navigationQuality)releaseNavigationPainter();
+        if(!navigationAttempted){
+            navigationAttempted=true;navigationStyle=id;navigationQuality=quality;
+            try{navigationPainter=StyleRegistry.createCapability(id,NavigationPainter.class);}
+            catch(RuntimeException|LinkageError error){android.util.Log.w("AFSStyle","Navigation factory fallback",error);}
+        }
+        if(navigationPainter==null)return false;
+        if(navigationTokens==null)navigationTokens=ui.tokens();
+        int save=canvas.save();
+        try{
+            return navigationPainter.draw(canvas,bounds,(slotOf(selected)>=0||pressing)?lensRect:null,
+                    navigationTokens,quality,getResources().getDisplayMetrics().density,value(lift),value(jelly),lightX,appearance.floating);
+        }catch(RuntimeException|LinkageError error){
+            NavigationPainter failed=navigationPainter;navigationPainter=null;
+            try{failed.release();}catch(RuntimeException|LinkageError ignored){}
+            android.util.Log.w("AFSStyle","Navigation draw fallback",error);return false;
+        }finally{canvas.restoreToCount(save);}
+    }
     private void layoutDock() {
         float span=getWidth()-ui.dp(shadowRoomDp()*2+8);
-        if(span<=0)return;
-        float even=span/ORDER.length;
+        if(span<=0||order.length==0)return;
+        float even=span/order.length;
         lensWidth=appearance.floating?Math.min(span,Math.max(ui.dp(84),even+ui.dp(8))):even;
-        pitch=!appearance.floating||even+ui.dp(8)>=ui.dp(84)?even:(span-lensWidth)/(ORDER.length-1);
+        pitch=!appearance.floating||even+ui.dp(8)>=ui.dp(84)||order.length==1?even:(span-lensWidth)/(order.length-1);
         float inset=(lensWidth-pitch)/2;
         firstCenter=ui.dp(4)+inset+pitch/2;
         int pad=Math.round(ui.dp(4)+inset);
@@ -198,7 +250,7 @@ public final class FloatingNav extends FrameLayout {
         return (e.getX()-panel.getX()-panel.getPivotX())/panel.getScaleX()+panel.getPivotX();
     }
     private float pointPosition(float x) {return (x-firstCenter)/Math.max(1,pitch);}
-    private int indexAt(float p) {return Math.max(0,Math.min(ORDER.length-1,Math.round(p)));}
+    private int indexAt(float p) {return Math.max(0,Math.min(order.length-1,Math.round(p)));}
 
     @Override public boolean onInterceptTouchEvent(MotionEvent e) {
         if(e.getActionMasked()==MotionEvent.ACTION_DOWN) {
@@ -212,7 +264,8 @@ public final class FloatingNav extends FrameLayout {
             if(SystemClock.uptimeMillis()<switchingUntil)return true;
             pointer=e.getPointerId(0);pressing=true;dragging=false;
             if(velocity!=null)velocity.recycle();velocity=VelocityTracker.obtain();velocity.addMovement(e);
-            pressX=localX(e);lightX=pressX;hoverPage=ORDER[indexAt(pointPosition(pressX))];
+            pressX=localX(e);lightX=pressX;hoverPage=order[indexAt(pointPosition(pressX))];
+            if(motion()){rippleAt=SystemClock.uptimeMillis();rippleX=pressX;material.invalidate();}
             position.tune(300,.55);if(appearance.floating)position.target=slotOf(hoverPage);
             lift.target=appearance.floating?1:0;swell.tune(311,.593);swell.target=appearance.floating?1:0;glow.tune(576,1);glow.target=1;
             updateColors(appearance.floating?hoverPage:selected);kick();return true;
@@ -225,12 +278,12 @@ public final class FloatingNav extends FrameLayout {
             float x=localX(e);lightX=x;
             if(!dragging && Math.abs(x-pressX)>ViewConfiguration.get(getContext()).getScaledTouchSlop())dragging=true;
             if(dragging&&appearance.floating) {
-                float p=pointPosition(x), last=ORDER.length-1;
+                float p=pointPosition(x), last=order.length-1;
                 float over=p-clamp(p,0,last);
                 float rubber=(float)(Math.signum(over)*(1-1/(1+Math.abs(over)*.55))*.35);
                 position.tune(1024,.9);position.target=clamp(p,0,last)+rubber;
                 pull.target=rubber;
-                int next=ORDER[indexAt(p)];
+                int next=order[indexAt(p)];
                 if(next!=hoverPage){hoverPage=next;performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);updateColors(hoverPage);}
             }
             kick();return true;
@@ -250,15 +303,15 @@ public final class FloatingNav extends FrameLayout {
         if(commit&&dragging) {
             int finger=slotOf(hoverPage);
             int next=indexAt((float)position.target+speed/Math.max(1,pitch)*.1f);
-            next=Math.max(Math.max(0,finger-1),Math.min(Math.min(ORDER.length-1,finger+1),next));
-            if(ORDER[next]!=hoverPage)performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
-            hoverPage=ORDER[next];
+            next=Math.max(Math.max(0,finger-1),Math.min(Math.min(order.length-1,finger+1),next));
+            if(order[next]!=hoverPage)performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK);
+            hoverPage=order[next];
         }
         pressing=false;dragging=false;pointer=-1;
         if(velocity!=null){velocity.recycle();velocity=null;}
         int target=commit?hoverPage:selected;
         position.tune(300,.55);position.target=Math.max(0,slotOf(target));
-        lift.target=0;swell.tune(144,.55);swell.target=0;pull.target=0;
+        lift.tune(420,.58);lift.target=0;swell.tune(144,.55);swell.target=0;pull.target=0;
         glow.tune(100,1);glow.target=0;
         updateColors(target);kick();
         if(commit){performClick();navigate(target);}
@@ -266,7 +319,12 @@ public final class FloatingNav extends FrameLayout {
 
     private void updateColors(int page) {
         if(visualPage==page)return;visualPage=page;
-        for(int i=0;i<5;i++){int color=i==page?ui.accent():(ui.amap?ui.text():ui.text2());icons[i].color=color;icons[i].invalidate();labels[i].setTextColor(color);}
+        boolean selectedVisible=slotOf(page)>=0;
+        for(int i=0;i<5;i++){
+            if(icons[i]==null||labels[i]==null)continue;
+            int color=selectedVisible&&i==page?ui.accent():(ui.amap?ui.text():ui.text2());
+            icons[i].color=color;icons[i].invalidate();labels[i].setTextColor(color);
+        }
     }
     private void kick() {
         if(!motion()) {
@@ -290,7 +348,7 @@ public final class FloatingNav extends FrameLayout {
     }
     private void updateGeometry() {
         if(pitch<=0)return;
-        float raised=ui.amap?0:clamp(value(lift),0,1), stretch=ui.amap?0:clamp(value(jelly),-.12f,.18f);
+        float raised=0, stretch=0;
         float width=(lensWidth+ui.dp(16)*raised)*(1+stretch);
         float height=appearance.floating?(ui.dp(54)+ui.dp(16)*raised)*(1-stretch*1.4f):ui.dp(30);
         if((ui.amap)&&appearance.floating)width=pitch-ui.dp(2);
@@ -301,11 +359,16 @@ public final class FloatingNav extends FrameLayout {
         pullPixels=ui.amap?0:value(pull)*ui.dp(38);
         panel.setScaleX(scale*(1+Math.abs(pullPixels)/Math.max(1,panel.getWidth())*.5f));
         panel.setScaleY(scale);panel.setTranslationX(pullPixels);
+        if(!"paper".equals(ui.style()))for(int i=0;i<icons.length;i++)if(icons[i]!=null){
+            float compression=i==(pressing?hoverPage:selected)?value(lift):0;
+            icons[i].setScaleX(1-.10f*compression);icons[i].setScaleY(1-.10f*compression);icons[i].setTranslationY(ui.dp(2)*compression);
+            if(labels[i]!=null)labels[i].setTranslationY(ui.dp(2)*compression);
+        }
         material.invalidate();renderGlass();
     }
     boolean gpuGlass() {return renderer!=null&&renderer.active();}
     boolean floating(){return appearance.floating;}
-    boolean hasGlass(){return appearance.floating&&!"none".equals(appearance.glass);}
+    boolean hasGlass(){return false;}
     int shadowRoomDp(){return appearance.floating?SHADOW_ROOM_DP:0;}
     void glassVisible(boolean visible) {
         if(glassVisible==visible){if(visible){playTransition();renderGlass();}return;}
@@ -314,6 +377,7 @@ public final class FloatingNav extends FrameLayout {
         if(visible){frameTime=0;playTransition();updateGeometry();kick();}
         else {
             finishContent();resetDock();
+            releaseNavigationPainter();
             Choreographer.getInstance().removeFrameCallback(frame);framePosted=false;frameTime=0;
             if(pressing)release(false,0);
         }
@@ -365,8 +429,12 @@ public final class FloatingNav extends FrameLayout {
     /** 全局滑页手势已删；这个入口只剩设备测试在用，用来模拟一次切页请求。 */
     static void swipeNavigate(Activity activity,int from,int to) {request(activity,from,to);}
     public static void open(Activity activity,int index) {
-        Intent intent=new Intent(activity,PAGES[index]);intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
-        intent.putExtra("from_bottom_nav",true);
+        if(index==DockPages.CHECKIN){
+            com.afs.guard.BackToHome.open(activity);
+            return;
+        }
+        Intent intent=DockPages.intent(activity,index,true);
+        if(intent==null)return;
         activity.startActivity(intent);activity.overridePendingTransition(0,0);
     }
     /**
@@ -392,9 +460,34 @@ public final class FloatingNav extends FrameLayout {
     @Override protected void onWindowVisibilityChanged(int visibility) {
         super.onWindowVisibilityChanged(visibility);if(visibility==VISIBLE&&source!=null)post(this::playTransition);
     }
-    @Override protected void onAttachedToWindow() {super.onAttachedToWindow();MotionPolicy.add(getContext(),motionChanged);getViewTreeObserver().addOnPreDrawListener(beforeDraw);}
+    @Override protected void onAttachedToWindow() {super.onAttachedToWindow();MotionPolicy.add(getContext(),motionChanged);getContext().getSharedPreferences(Ui.SP,0).registerOnSharedPreferenceChangeListener(visualChanged);EffectQualityManager.addListener(navigationStyleChanged);getViewTreeObserver().addOnPreDrawListener(beforeDraw);}
+    @Override public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if(!hasFocus)return;
+        LiveNavWindow.focusChanged(activity);
+        reloadPluginConfigIfChanged();
+    }
+
+    /** Called from the Activity lifecycle after Settings returns to this page. */
+    boolean reloadPluginConfigIfChanged() {
+        long current=BuiltInPluginStore.revision(getContext());
+        if(current==pluginRevision)return false;
+        pluginRevision=current;
+        post(() -> {
+            if(activity.isFinishing()||activity.isDestroyed())return;
+            if(DockPages.isPlugin(selected)&&!DockPages.isEnabled(activity,selected)) {
+                open(activity,DockPages.GUARD);
+                activity.finish();
+            } else {
+                activity.recreate();
+            }
+        });
+        return true;
+    }
     @Override protected void onDetachedFromWindow() {
         cancelPending(activity);
+        getContext().getSharedPreferences(Ui.SP,0).unregisterOnSharedPreferenceChangeListener(visualChanged);
+        EffectQualityManager.removeListener(navigationStyleChanged);releaseNavigationPainter();
         MotionPolicy.remove(motionChanged);finishContent();glassVisible(false);dismissSnapshot(false);
         if(getViewTreeObserver().isAlive())getViewTreeObserver().removeOnPreDrawListener(beforeDraw);
         super.onDetachedFromWindow();
@@ -403,58 +496,87 @@ public final class FloatingNav extends FrameLayout {
     private final class Material extends View {
         private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF bounds=new RectF();
+        private ReferenceMaterial reference;
         Material(){super(activity);setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
         @Override protected void onDraw(Canvas c) {
-            float raised=clamp(value(lift),0,1),h=getHeight(),w=getWidth();bounds.set(.5f,.5f,w-.5f,h-.5f);
-
-            if(ui.amap){
-                p.setShader(null);p.setStyle(Paint.Style.FILL);p.setColor(ui.palette.glassTint);p.setAlpha(hasGlass()?("ultra".equals(appearance.glass)?210:235):255);c.drawRoundRect(bounds,appearance.floating?h/2:0,appearance.floating?h/2:0,p);p.setAlpha(255);
-                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(ui.dp(.55f));p.setColor(ui.line());c.drawRoundRect(bounds,appearance.floating?h/2:0,appearance.floating?h/2:0,p);
-                if(selected>=0||pressing){p.setStyle(Paint.Style.FILL);p.setColor(ui.palette.selection);c.drawRoundRect(lensRect,lensRect.height()/2,lensRect.height()/2,p);}return;
+            float h=getHeight(),w=getWidth();
+            bounds.set(.5f,.5f,w-.5f,h-.5f);
+            String requested=StyleManager.selected(activity);
+            if(!"paper".equals(requested)){
+                if(reference==null)reference=new ReferenceMaterial(requested,ui.surface(),
+                        ui.dp(StyleMood.spatial(requested)?24:30),getResources().getDisplayMetrics().density);
+                reference.setBounds(0,0,getWidth(),getHeight());
+                reference.draw(c);
+                if(slotOf(selected)>=0||pressing){
+                    p.setShader(null);p.setStyle(Paint.Style.FILL);p.setColor(0x28FFFFFF);
+                    c.drawRoundRect(lensRect,ui.dp(22),ui.dp(22),p);
+                    p.setColor(ui.accent());
+                    float selectedX=lensRect.centerX();
+                    c.drawRoundRect(selectedX-ui.dp(14),h-ui.dp(5),selectedX+ui.dp(14),
+                            h-ui.dp(2),ui.dp(2),ui.dp(2),p);
+                }
+                drawRipple(c);return;
             }
-            p.setShader(null);p.setStyle(Paint.Style.STROKE);
-            if(!appearance.floating){p.setColor(ui.line());p.setStrokeWidth(ui.dp(.5f));c.drawLine(0,0,w,0,p);}
-            else {
-            for(int i=2;i>=1;i--){p.setColor(ui.dark?0x06000000:0x03000000);p.setStrokeWidth(ui.dp(i*2));c.drawRoundRect(bounds,h/2,h/2,p);}
-            if(!hasGlass()){
-                // 「无」= 不透明：窗口背景是透明的，实色底必须由这里自己画，否则会透出页面
-                p.setStyle(Paint.Style.FILL);p.setColor(ui.surface());c.drawRoundRect(bounds,h/2,h/2,p);p.setStyle(Paint.Style.STROKE);
+            if(drawNavigationStyle(c,bounds))return;
+            String style=StyleMood.of(StyleManager.selected(activity));
+            float radius=appearance.floating?ui.dp(16):0;
+            // 风格先定底栏的形状语汇：纸面近方角、玻璃球悬浮、立体硬边宽栏、流体渐变胶囊。
+            if(StyleMood.glass(style))radius=w/2f;
+            else if(StyleMood.spatial(style))radius=ui.dp(6);
+            else if(StyleMood.fluid(style))radius=ui.dp(30);
+            else radius=ui.dp(8);
+            p.setShader(null);p.setStyle(Paint.Style.FILL);
+            if(StyleMood.fluid(style)){
+                p.setShader(new LinearGradient(0,0,w,h,
+                        new int[]{StyleMood.blend(ui.accent(),0xFF3BB6C9,.45f),ui.accent()},
+                        null,Shader.TileMode.CLAMP));
+                c.drawRoundRect(bounds,radius,radius,p);p.setShader(null);
+                p.setColor(ui.surface());
+            } else p.setColor(ui.surface());
+            c.drawRoundRect(bounds,radius,radius,p);
+            p.setStyle(Paint.Style.STROKE);
+            if(StyleMood.spatial(style)){
+                p.setStrokeWidth(ui.dp(2.2f));p.setColor(ui.line());
+                c.drawRoundRect(bounds,radius,radius,p);
+                p.setStyle(Paint.Style.FILL);p.setColor(StyleMood.blend(ui.line(),ui.accent(),.55f));
+                c.drawRoundRect(ui.dp(14),h-ui.dp(7),w-ui.dp(14),h-ui.dp(3),ui.dp(2),ui.dp(2),p);
+            } else if(StyleMood.fluid(style)){
+                p.setStrokeWidth(ui.dp(1.2f));p.setColor(0x66FFFFFF);
+                c.drawRoundRect(bounds,radius,radius,p);
+            } else {
+                p.setStrokeWidth(ui.dp(StyleMood.glass(style)?1.2f:.75f));
+                p.setColor(StyleMood.glass(style)?ui.line():ui.line());
+                c.drawRoundRect(bounds,radius,radius,p);
             }
-            p.setStrokeWidth(ui.dp(.45f));
-            p.setShader(new LinearGradient(0,0,0,h,new int[]{ui.dark?0x60FFFFFF:0x85FFFFFF,0x048A96A5,ui.dark?0x285C708C:0x208A96A5},new float[]{0,.5f,1},Shader.TileMode.CLAMP));
-            c.drawRoundRect(bounds,h/2,h/2,p);p.setShader(null);
+            if(slotOf(selected)>=0||pressing){
+                p.setStyle(Paint.Style.FILL);p.setColor(ui.palette.selection);
+                float lens=StyleMood.glass(style)?lensRect.height()/2f:ui.dp(StyleMood.spatial(style)?4:StyleMood.fluid(style)?20:10);
+                c.drawRoundRect(lensRect,lens,lens,p);
+                p.setColor(ui.accent());
+                float x=lensRect.centerX(),y=ui.dp(4);
+                c.drawRoundRect(x-ui.dp(8),y,x+ui.dp(8),y+ui.dp(2),ui.dp(1),ui.dp(1),p);
             }
-            if(selected>=0||pressing) {
-                p.setStyle(Paint.Style.FILL);p.setColor(ui.palette.selection);p.setAlpha(hasGlass()?(int)(217*(1-raised)):217);
-                c.drawRoundRect(lensRect,lensRect.height()/2,lensRect.height()/2,p);p.setAlpha(255);
-            }
-            if(raised>0&&hasGlass()) {
-                p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(ui.dp(.6f));
-                p.setShader(new LinearGradient(0,lensRect.top,0,lensRect.bottom,new int[]{(int)(185*raised)<<24|0xFFFFFF,0x027A96B8,(int)(105*raised)<<24|0xFFFFFF},new float[]{0,.5f,1},Shader.TileMode.CLAMP));
-                c.drawRoundRect(lensRect,lensRect.height()/2,lensRect.height()/2,p);p.setShader(null);
-            }
-            if(glow.value>.001) {
-                p.setStyle(Paint.Style.FILL);
-                p.setShader(new RadialGradient(lightX,h/2,ui.dp(28),new int[]{((int)(15*clamp(value(glow),0,1))<<24)|0xFFFFFF,0x00FFFFFF},null,Shader.TileMode.CLAMP));
-                c.drawRoundRect(bounds,h/2,h/2,p);p.setShader(null);
-            }
+        }
+        private void drawRipple(Canvas c){
+            if(rippleAt==0||!motion())return;
+            float t=(SystemClock.uptimeMillis()-rippleAt)/600f;if(t>=1){rippleAt=0;return;}
+            int save=c.save();c.clipRect(bounds);p.setShader(null);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(ui.dp(1.2f));
+            p.setColor(StyleMood.glass(ui.style())?0xFFFFFFFF:0xFFFFE9A5);p.setAlpha(Math.round(180*(1-t)));
+            float radius=ui.dp(8+100*(1-(1-t)*(1-t)));c.drawCircle(rippleX,getHeight()/2f,radius,p);
+            p.setAlpha(Math.round(70*(1-t)));p.setStrokeWidth(ui.dp(6));c.drawCircle(rippleX,getHeight()/2f,radius*.84f,p);p.setAlpha(255);c.restoreToCount(save);postInvalidateOnAnimation();
         }
     }
 
     private final class Icon extends View {
         private final int type;private int color;private final Paint p=new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final ApprovedGlyph.Painter approved=new ApprovedGlyph.Painter();
         Icon(Activity c,int type,int color){super(c);this.type=type;this.color=color;}
         @Override protected void onDraw(Canvas canvas) {
+            String style=StyleManager.selected(activity);int family=ApprovedGlyph.kind(T.s(LABELS[type]));
+            if(!"paper".equals(style)&&family>=0){int s=canvas.save();canvas.scale(getWidth()/48f,getHeight()/48f);approved.draw(canvas,family,style,color);canvas.restoreToCount(s);return;}
             Canvas c=canvas;c.save();c.scale(getWidth()/28f,getHeight()/28f);
             // 导航图标始终用同一套细线轮廓，选中只改变颜色与气泡，不改变填充和线条重量。
-            if(ui.amap){AmapStyle.glyph(c,p,T.s(LABELS[type]),color,false);c.restore();return;}
-            int inside=(((color>>16)&255)*.2126+((color>>8)&255)*.7152+(color&255)*.0722)>200?0xE0101318:0xDDF3F4F6;
-            p.setColor(color);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(2.4f);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
-            if(type==0){p.setStyle(Paint.Style.FILL);c.drawRoundRect(7,5,24,24,3,3,p);p.setStyle(Paint.Style.STROKE);c.drawLine(4,19,4,4,p);c.drawLine(4,4,18,4,p);p.setColor(inside);c.drawLine(11,11,20,11,p);c.drawLine(11,16,18,16,p);}
-            else if(type==1){p.setStyle(Paint.Style.FILL);c.drawRoundRect(5,3,23,25,3,3,p);p.setStyle(Paint.Style.STROKE);p.setColor(inside);c.drawLine(9,9,18,9,p);c.drawLine(9,13,16,13,p);Path path=new Path();path.moveTo(10,19);path.lineTo(13,22);path.lineTo(20,16);c.drawPath(path,p);}
-            else if(type==2){for(int i=0;i<6;i++){c.save();c.rotate(i*60,14,14);c.drawLine(14,3,14,14,p);c.drawLine(10,6,14,9,p);c.drawLine(18,6,14,9,p);c.restore();}}
-            else if(type==4){c.drawCircle(14,14,7,p);c.drawCircle(14,14,2.5f,p);for(int i=0;i<8;i++){c.save();c.rotate(i*45,14,14);c.drawLine(14,3,14,6,p);c.restore();}}
-            else{c.drawCircle(14,14,11,p);Path path=new Path();path.moveTo(8,14);path.lineTo(12,18);path.lineTo(20,10);c.drawPath(path,p);}
+            AmapStyle.glyph(c,p,T.s(LABELS[type]),color,false);
             c.restore();
         }
     }

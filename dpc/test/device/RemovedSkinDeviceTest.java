@@ -23,12 +23,14 @@ public final class RemovedSkinDeviceTest extends Instrumentation {
             check(Build.MODEL.toLowerCase().contains("sdk"),"emulator required");
             prefs.edit().putString(ThemeStore.CONFIG,"{\"skin\":\"ripple\",\"font\":\"serif\",\"seed\":-256,\"amapSeed\":-65536}").commit();
             AppearanceConfig config=ThemeStore.load(c);
-            check("classic".equals(config.skin),"stored removed style loads as classic");
+            check("amap".equals(config.skin),"stored removed style loads as the paper style");
             check(config.seed==-256&&config.amapSeed==-65536&&"serif".equals(config.font),"other appearance preferences preserved");
             page=startActivitySync(new Intent(c,ThemeActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));Thread.sleep(600);
             View root=page.getWindow().getDecorView();
-            check(text(root,T.s("原有风格")),"classic choice visible");
-            check(text(root,T.s("简约风格")),"minimal choice visible");
+            check(!text(root,T.s("原有风格")),"classic choice absent from single-skin theme page");
+            check(text(root,T.s("界面风格")),"pluggable style picker remains available");
+            check(text(root,T.s("简约风格"))&&text(root,T.s("液态玻璃"))
+                    &&text(root,T.s("空间立体"))&&text(root,T.s("流体渐变")),"all four styles available");
             check(!text(root,"涟漪风格")&&!text(root,"Ripple"),"removed style absent from actual theme page");
             out.putString("stream","Removed skin device: "+checks+" checks passed\n");result=-1;
         }catch(Throwable error){out.putString("stream",android.util.Log.getStackTraceString(error));}

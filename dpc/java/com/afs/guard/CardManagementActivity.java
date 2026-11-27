@@ -17,11 +17,12 @@ public class CardManagementActivity extends ThemedActivity {
     private Ui ui;private LinearLayout body;private String category="",renderedCategory;
     private Bundle categoryScroll=new Bundle();private boolean resumedOnce;
     private boolean resumed;
-    private TextView linkageState,linkageElapsed;
+    private TextView linkageState,linkageElapsed,rewardRemaining;
     private final Handler linkageHandler=new Handler(Looper.getMainLooper());
     private final Runnable linkageTick=new Runnable(){
         public void run(){
-            if(!resumed||!category.isEmpty()||linkageState==null)return;
+            if(!resumed)return;
+            refreshRewardSummary();
             refreshLinkageSummary();
             linkageHandler.postDelayed(this,1000L);
         }
@@ -49,23 +50,29 @@ public class CardManagementActivity extends ThemedActivity {
     private void toast(String value){Toast.makeText(this,value==null?T.s("请稍后重试"):value,Toast.LENGTH_SHORT).show();}
     private void render(){
         stopLinkageRefresh();
+        linkageState=null;linkageElapsed=null;rewardRemaining=null;
         if(renderedCategory!=null)categoryScroll.putBundle(renderedCategory,PageScrollState.capture(this));
         try{if("love".equals(category))love();else if("summary".equals(category))summary();else if("checkin".equals(category))checkinSettings();else home();}
         catch(RuntimeException e){base(T.s("卡管理"));hint(body,e.getMessage());}
         renderedCategory=category;PageScrollState.restore(this,categoryScroll.getBundle(category));
-        if(resumed&&category.isEmpty())startLinkageRefresh();
+        if(resumed)startLinkageRefresh();
     }
     private void home(){
         category="";base(T.s("卡管理"));hint(body,T.s("统一管理卡片、学习联动和奖励。"));
-        CardData data=CardStore.snapshot(this);LinearLayout balance=card();balance.addView(ui.title(minutes(data.balanceMillis())));hint(balance,T.s("热爱奖励余额 · 跨天累计 · 自动抵扣定时冻结"));
-        long until=data.rewardUntil(System.currentTimeMillis());if(until>0)hint(balance,T.s("本次减免剩余 ")+minutes(until-System.currentTimeMillis()));
+        long nowMs=GuardClock.now(this).getTimeInMillis();CardData data=CardStore.snapshot(this);
+        int available=data.availableTickets(nowMs),waiting=data.waitingTickets(nowMs);
+        LinearLayout balance=card();balance.addView(ui.title(available+T.s(" 张可用热爱券")));
+        hint(balance,T.s("按卡积累 · 用一张解冻所有应用的时段冻结和使用限额 · 领取后需满 24 小时才能使用。")+(waiting>0?T.s(" 待解锁 ")+waiting+T.s(" 张。"):""));
+        TextView homeUse=button(balance,T.s("使用一张热爱卡"),true,()->useTicket());homeUse.setTag("reward_use_home");
+        rewardRemaining=dynamicHint(balance,"reward_remaining");
+        refreshRewardSummary();
         LinearLayout linkage=card();linkage.addView(ui.title(T.s("学习联动罚时")));
         hint(linkage,T.s("20:00 检查未完成任务，只在当天结束的冻结后接续，持续至任务完成。跨午夜、次日才结束的冻结不参与学习联动。正在放行的应用不提前打断。完成任务解除联动，热爱奖励不抵扣。"));
         linkageState=dynamicHint(linkage,"learning_linkage_state");
         linkageElapsed=dynamicHint(linkage,"learning_linkage_elapsed");
         refreshLinkageSummary();
         row(T.s("打卡设置"),T.s("外观 · 字体 · 同步 · 上传"),()->{category="checkin";render();});
-        row(T.s("热爱卡"),T.s("完成热爱，积累冻结减免"),()->{category="love";render();});
+        row(T.s("热爱卡"),T.s("完成攒券，用券解冻时段冻结"),()->{category="love";render();});
         row(T.s("记忆卡"),T.s("抽取、学习计划、学科与卡片"),()->startActivity(new Intent(this,MemoryActivity.class).putExtra(EXTRA_MANAGE,true)));
         row(T.s("刷题卡"),T.s("每日目标、学习联动与题库"),()->startActivity(new Intent(this,QuizActivity.class).putExtra(EXTRA_MANAGE,true)));
         row(T.s("目标卡"),T.s("创建目标、默认完成量与卡面设置"),()->startActivity(new Intent(this,CheckinActivity.class).putExtra(CheckinActivity.EXTRA_OPEN,"manage").putExtra(EXTRA_MANAGE,true)));
@@ -77,11 +84,23 @@ public class CardManagementActivity extends ThemedActivity {
     }
     private void startLinkageRefresh(){
         linkageHandler.removeCallbacks(linkageTick);
-        if(!resumed||!category.isEmpty()||linkageState==null)return;
+        if(!resumed)return;
+        refreshRewardSummary();
         refreshLinkageSummary();
         linkageHandler.postDelayed(linkageTick,1000L);
     }
     private void stopLinkageRefresh(){linkageHandler.removeCallbacks(linkageTick);}
+    private void refreshRewardSummary(){
+        if(rewardRemaining==null)return;
+        long now=GuardClock.now(this).getTimeInMillis();
+        long until=CardStore.snapshot(this).rewardUntil(now);
+        boolean visible=until>now;
+        setTextIfChanged(rewardRemaining,visible
+                ?T.s("解冻中 · 剩余 ")+FocusPlan.human(until-now)+T.s(" · 到 ")
+                    +new SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(new Date(until))+T.s(" 自动结束")
+                :"");
+        setVisibilityIfChanged(rewardRemaining,visible?View.VISIBLE:View.GONE);
+    }
     private void refreshLinkageSummary(){refreshLinkageSummary(GuardClock.now(this));}
     void refreshLinkageSummary(Calendar now){
         if(linkageState==null||linkageElapsed==null||!category.isEmpty())return;
@@ -101,7 +120,7 @@ public class CardManagementActivity extends ThemedActivity {
     static LinkageSummary linkageSummary(String reason,long origin,long now){
         String state=reason==null||reason.trim().isEmpty()?T.s("当前无额外冻结"):reason.trim();
         String elapsed=origin>0L&&now>=origin
-                ?T.s("距本次检查已过 ")+minutes(now-origin)+T.s(" · 完成后解除")
+                ?T.s("延时冻结已持续 ")+(now==origin?"0 秒":FocusPlan.human(now-origin))+T.s(" · 完成目标后解冻")
                 :"";
         return new LinkageSummary(state,elapsed);
     }
@@ -113,26 +132,66 @@ public class CardManagementActivity extends ThemedActivity {
     }
     private void row(String title,String description,Runnable action){LinearLayout box=card();TextView t=ui.title(title+"  ›");SwissTypography.role(t,SwissTypography.Role.SECTION);box.addView(t);hint(box,description);String[] types={T.s("目标卡"),T.s("禁忌卡"),T.s("记忆卡"),T.s("刷题卡"),T.s("热爱卡"),T.s("总结卡")};for(int i=0;i<types.length;i++)if(types[i].equals(title))CardPalette.apply(box,i,false);box.setOnClickListener(v->{try{action.run();}catch(RuntimeException e){toast(e.getMessage());}});}
     private void love(){
-        base(T.s("热爱卡"));CardData data=CardStore.snapshot(this);long now=System.currentTimeMillis();
-        LinearLayout wallet=card();wallet.addView(ui.title(minutes(data.balanceMillis())));hint(wallet,T.s("可用奖励余额"));hint(wallet,T.s("每天最多完成一张热爱卡，等概率抽取 1–60 分钟。余额自动抵扣后续定时冻结，学习联动和禁忌惩罚仍然有效。"));
-        hint(wallet,data.earnedToday(now)?T.s("今天的热爱奖励已领取"):T.s("今天还可完成一张热爱卡，在打卡页面上滑完成。"));
+        base(T.s("热爱卡"));Calendar now=GuardClock.now(this);CardData data=CardStore.snapshot(this);
+        long nowMs=now.getTimeInMillis();int available=data.availableTickets(nowMs),waiting=data.waitingTickets(nowMs);
+        LinearLayout wallet=card();wallet.addView(ui.title(available+T.s(" 张可用券")));
+        rewardRemaining=dynamicHint(wallet,"reward_remaining");
+        refreshRewardSummary();
+        hint(wallet,T.s("每张卡各自攒券；领取满 24 小时后才能使用，用一张即可解冻所有应用的时段冻结和使用限额，持续该卡设定的分钟数。")+(waiting>0?T.s(" 当前待解锁 ")+waiting+T.s(" 张。"):""));
+        TextView use=button(body,T.s("使用一张热爱卡"),true,()->useTicket());use.setTag("reward_use");
         button(body,T.s("＋ 创建热爱卡"),true,()->editLove(null));
         int count=0;for(int i=0;i<data.love().length();i++){JSONObject c=data.love().optJSONObject(i);if(c.optBoolean("archived"))continue;count++;
-            final String id=c.optString("id");row(c.optString("title"),T.s("抽奖奖励 1–60 分钟 · 点击修改"),()->editLove(id));}
+            final String id=c.optString("id");row(c.optString("title"),data.availableTickets(id,nowMs)+T.s(" 张可用 · ")+data.waitingTickets(id,nowMs)+T.s(" 张待解锁 · 每张 ")+c.optInt("minutes")+T.s(" 分钟 · 点击修改"),()->editLove(id));}
         if(count==0)hint(body,T.s("添加一件自己热爱的事，例如练琴、运动或绘画。"));
-        button(body,T.s("奖励明细"),false,()->rewardHistory());button(body,T.s("热爱卡回收站"),false,()->loveTrash());
+        button(body,T.s("券明细"),false,()->rewardHistory());button(body,T.s("热爱卡回收站"),false,()->loveTrash());
     }
     private void editLove(String id){
         JSONObject c=id==null?null:CardStore.snapshot(this).find(id);LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(ui.dp(24),0,ui.dp(24),0);
         EditText title=new EditText(this);title.setHint(T.s("热爱名称"));title.setText(c==null?"":c.optString("title"));box.addView(title);
-        hint(box,T.s("完成后等概率抽取 1–60 分钟，每天仅一张，单次上限固定。"));
+        EditText minutes=new EditText(this);minutes.setInputType(2);minutes.setHint(T.s("每张券解冻分钟数 1–60"));minutes.setText(""+(c==null?60:c.optInt("minutes",60)));box.addView(minutes);
         AlertDialog.Builder builder=ThemeStore.dialog(this).setTitle(id==null?T.s("创建热爱卡"):T.s("编辑热爱卡")).setView(box).setPositiveButton(T.s("保存"),null).setNegativeButton(T.s("取消"),null);
-        if(id!=null)builder.setNeutralButton(T.s("移入回收站"),(d,w)->ThemeStore.dialog(this).setTitle(T.s("移入回收站？")).setMessage(T.s("已获得的奖励与余额会保留。")).setNegativeButton(T.s("取消"),null).setPositiveButton(T.s("移入"),(a,b)->{CardStore.archive(this,id,true);render();}).show());
-        AlertDialog dialog=builder.create();dialog.setOnShowListener(d->dialog.getButton(-1).setOnClickListener(v->{try{CardStore.saveLove(this,id,title.getText().toString(),60);dialog.dismiss();render();}catch(RuntimeException e){toast(e.getMessage());}}));dialog.show();
+        if(id!=null)builder.setNeutralButton(T.s("移入回收站"),(d,w)->ThemeStore.dialog(this).setTitle(T.s("移入回收站？")).setMessage(T.s("已攒的券会保留。")).setNegativeButton(T.s("取消"),null).setPositiveButton(T.s("移入"),(a,b)->{CardStore.archive(this,id,true);render();}).show());
+        final String cardId=id;
+        AlertDialog dialog=builder.create();dialog.setOnShowListener(d->dialog.getButton(-1).setOnClickListener(v->{
+            int value;try{value=Integer.parseInt(minutes.getText().toString().trim());}catch(NumberFormatException e){toast(T.s("分钟数只能是 1–60"));return;}
+            try{CardStore.saveLove(this,cardId,title.getText().toString(),value);dialog.dismiss();render();}catch(RuntimeException e){toast(e.getMessage());}
+        }));dialog.show();
+    }
+    /** 用一张券：选一张有券的卡，扣一张并立刻让守卫重算时段与额度解冻；不检查学习目标。 */
+    private void useTicket(){
+        long nowMs=GuardClock.now(this).getTimeInMillis();CardData data=CardStore.snapshot(this);
+        List<String> ids=new ArrayList<>(),labels=new ArrayList<>();int waiting=0;
+        for(int i=0;i<data.love().length();i++){JSONObject c=data.love().optJSONObject(i);if(c==null||c.optBoolean("archived"))continue;
+            String id=c.optString("id");int n=data.availableTickets(id,nowMs);waiting+=data.waitingTickets(id,nowMs);if(n<=0)continue;
+            ids.add(c.optString("id"));labels.add(c.optString("title")+" · "+n+T.s(" 张 · ")+c.optInt("minutes")+T.s(" 分钟"));}
+        if(ids.isEmpty()){toast(waiting>0?T.s("热爱券领取满 24 小时后才能使用"):T.s("还没有可用的热爱券"));return;}
+        ThemeStore.dialog(this).setTitle(T.s("用一张热爱券"))
+            .setItems(labels.toArray(new String[0]),(d,w)->{
+                int value;
+                try{value=CardStore.use(this,ids.get(w));}catch(RuntimeException e){toast(e.getMessage());return;}
+                if(value<=0){toast(T.s("这张券已用完"));return;}
+                Guard.applyAsync(this);
+                toast(T.f("已解冻所有应用的时段与使用限额 %d 分钟",value));
+                render();
+            }).setNegativeButton(T.s("取消"),null).show();
     }
     private void loveTrash(){CardData data=CardStore.snapshot(this);List<String> ids=new ArrayList<>(),names=new ArrayList<>();for(int i=0;i<data.love().length();i++){JSONObject c=data.love().optJSONObject(i);if(c.optBoolean("archived")){ids.add(c.optString("id"));names.add(T.s("恢复「")+c.optString("title")+"」");}}
         if(ids.isEmpty()){toast(T.s("回收站为空"));return;}ThemeStore.dialog(this).setTitle(T.s("热爱卡回收站")).setItems(names.toArray(new String[0]),(d,w)->{CardStore.archive(this,ids.get(w),false);render();}).setNegativeButton(T.s("关闭"),null).show();}
-    private void rewardHistory(){CardData data=CardStore.snapshot(this);JSONArray earned=data.earned();StringBuilder text=new StringBuilder(T.s("可用余额 ")+minutes(data.balanceMillis())+"\n");for(int i=earned.length()-1;i>=Math.max(0,earned.length()-30);i--){JSONObject e=earned.optJSONObject(i);text.append("\n").append(e.optString("day")).append(" · ").append(e.optString("title")).append(" +").append(e.optInt("minutes")).append(T.s(" 分钟"));}ThemeStore.dialog(this).setTitle(T.s("热爱奖励")).setMessage(text.toString()).setPositiveButton(T.s("关闭"),null).show();}
+    private void rewardHistory(){
+        CardData data=CardStore.snapshot(this);JSONArray earned=data.earned();
+        long nowMs=GuardClock.now(this).getTimeInMillis();
+        StringBuilder text=new StringBuilder(T.s("可用券 ")+data.availableTickets(nowMs)+T.s(" 张 · 待解锁 ")+data.waitingTickets(nowMs)+T.s(" 张\n"));
+        for(int i=earned.length()-1;i>=Math.max(0,earned.length()-30);i--){JSONObject e=earned.optJSONObject(i);
+            String state;
+            if(e.optBoolean("used"))state=T.s(" · 已使用");
+            else if(data.ticketAvailable(e,nowMs))state=T.s(" · 可用");
+            else state=T.s(" · 待解锁 · ")+new SimpleDateFormat("M/d HH:mm",T.locale()).format(new Date(data.availableAt(e)));
+            text.append("\n").append(e.optString("day")).append(" · ").append(e.optString("title")).append(state);}
+        JSONArray uses=data.db.optJSONArray("uses");
+        for(int i=uses.length()-1;i>=Math.max(0,uses.length()-10);i--){JSONObject u=uses.optJSONObject(i);
+            text.append("\n").append(u.optString("title")).append(" · ").append(u.optInt("minutes")).append(T.s(" 分钟解冻"));}
+        ThemeStore.dialog(this).setTitle(T.s("热爱券记录")).setMessage(text.toString()).setPositiveButton(T.s("关闭"),null).show();
+    }
     private void summary(){
         base(T.s("总结卡"));CycleSummary summary=CardStore.snapshot(this).summary(System.currentTimeMillis());hint(body,T.s("周期最后一天出现总结卡，20:00 后未完成会延长学习联动冻结。跨周期继续保留待办，完成后解除这项联动。"));
         hint(body,T.s("直接填写周期天数，例如21天、40天。自定义周期可与每周、每月总结同时启用；各周期分别完成，取消周期不会清除已经到期的总结。"));

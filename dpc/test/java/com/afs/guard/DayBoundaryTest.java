@@ -54,17 +54,18 @@ public final class DayBoundaryTest {
         eq(at(2026, 9, 31, 4, 0), DayBoundary.nextResetMs(earlyTwo, 4), "next reset after boundary");
         eq(at(2026, 10, 1, 0, 0), DayBoundary.nextResetMs(morning, 0), "next reset at midnight");
 
-        // 非法小时按统一后的默认值（早上 8 点）兜底，不抛异常
-        eq(at(2026, 9, 31, 8, 0), DayBoundary.startMs(morning, -3), "negative hour falls back");
-        eq(at(2026, 9, 31, 8, 0), DayBoundary.startMs(morning, 99), "too large hour falls back");
+        // 非法小时按默认零点兜底
+        eq(0, DayBoundary.DEFAULT_HOUR, "default hour is midnight");
+        eq(at(2026, 9, 31, 0, 0), DayBoundary.startMs(morning, -3), "negative hour falls back");
+        eq(at(2026, 9, 31, 0, 0), DayBoundary.startMs(morning, 99), "too large hour falls back");
 
         // 文案
         eq("每日零点", DayBoundary.label(0), "midnight label");
         eq("每日 4:00", DayBoundary.label(4), "four label");
-        eq("每天早上 8 点", DayBoundary.label(42), "invalid label falls back");
-        eq("每天早上 8 点", DayBoundary.label(DayBoundary.DEFAULT_HOUR), "default label is 8am");
+        eq("每日零点", DayBoundary.label(42), "invalid label falls back");
+        eq("每日零点", DayBoundary.label(DayBoundary.DEFAULT_HOUR), "default label is midnight");
 
-        // 统一后的日界：凌晨 7:30 还算「昨天」，8:00 整属于新的一天
+        // 8 点日界：凌晨 7:30 还算「昨天」，8:00 整属于新的一天（通用逻辑，与默认无关）
         // 注意 at() 的月份是 Calendar 的 0-based，9 就是十月
         long beforeEight = at(2026, 9, 31, 7, 30);
         eq(at(2026, 9, 30, 8, 0), DayBoundary.startMs(beforeEight, 8), "7:30 still previous quota day");
@@ -79,6 +80,15 @@ public final class DayBoundaryTest {
         eq(DayBoundary.nextResetMs(morning,0),pending,"change starts at next old boundary");
         eq(pending,DayBoundary.changeAt(morning+60000,0,pending),"editing pending time again never postpones activation");
         eq(DayBoundary.nextResetMs(morning,4),DayBoundary.changeAt(morning,4,morning-1),"expired pending marker schedules next valid boundary");
+        long beforeMinute=at(2026,9,31,11,29);
+        long exactMinute=at(2026,9,31,11,30);
+        eq(at(2026,9,30,11,30),DayBoundary.startMs(beforeMinute,11,30),"minute boundary retains previous day");
+        eq(exactMinute,DayBoundary.startMs(exactMinute,11,30),"minute boundary resets exactly");
+        eq("2026-10-30",DayBoundary.key(beforeMinute,11,30),"minute ledger key before reset");
+        eq("2026-10-31",DayBoundary.key(exactMinute,11,30),"minute ledger key after reset");
+        eq(exactMinute,DayBoundary.nextResetMs(beforeMinute,11,30),"next minute reset");
+        eq(at(2026,10,1,11,30),DayBoundary.nextResetMs(exactMinute,11,30),"next reset across month");
+        eq("每日 11:30",DayBoundary.label(11,30),"minute reset label");
         System.out.println("Day boundary: " + checks + " checks passed");
     }
 }

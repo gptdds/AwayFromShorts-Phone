@@ -117,6 +117,7 @@ public final class MemoryStatsTest {
         eq(3, s.total, "total cards");
         eq(2, s.learned, "never-studied card is not learned");
         eq(1, s.dueToday, "due today ignores never-studied cards");
+        eq(3, s.activeDays, "multiple reviews on the same day count as one learning day");
         eq(4, s.reviews7, "reviews in the last 7 days");
         eq(2, s.correct7, "remembered in the last 7 days");
         check(Math.abs(s.accuracy7() - 0.5) < 1e-9, "accuracy is remembered/reviews");

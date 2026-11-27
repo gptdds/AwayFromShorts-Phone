@@ -93,7 +93,7 @@ public class HistoryActivity extends ThemedActivity {
     private void refreshPluginDirectory() {
         HostRuntime.get(this).registry().refreshAsync(() -> {
             if (isFinishing() || isDestroyed()) return;
-            String next = HostRuntime.get(this).registry().signature();
+            String next = HostRuntime.get(this).registry().signature()+":"+com.afs.guard.plugins.BuiltInPluginStore.revision(this);
             if (!next.equals(pluginSignature)) {
                 renderPluginEntries();
             }
@@ -172,7 +172,7 @@ public class HistoryActivity extends ThemedActivity {
             }
         }
 
-        // ---- 最近流水（按时间倒序）----
+        // ---- 最近流水（按时间倒序；所有卡片动作都进同一条时间线）----
         List<StudyStore.Rec> recent = new ArrayList<>(recs);
         java.util.Collections.sort(recent, new java.util.Comparator<StudyStore.Rec>() {
             public int compare(StudyStore.Rec a, StudyStore.Rec b) {
@@ -187,20 +187,94 @@ public class HistoryActivity extends ThemedActivity {
             goalById.put(g.id, g);
         }
 
-        // 认领禁忌的流水混进同一条时间线：StudyStore.Rec 和 TabooClaim 两种元素
+        // 所有卡片动作混进同一条时间线，再按时间倒序取最近 20 条。
+        // FlowEvent 用一个统一的时间戳包装非打卡动作。
         List<Object> flow = new ArrayList<>();
         for (StudyStore.Rec r : recent) {
             flow.add(r);
         }
         for (StudyGate.TabooClaim tc : tabooClaims) {
-            flow.add(tc);
+            flow.add(new FlowEvent(FlowEvent.TABOO, tc.ts, tc.name, true));
+        }
+        java.util.Set<String> declineKeys = new java.util.HashSet<>();
+        for (StudyGate.TabooClaim declined : StudyGate.tabooDeclineLog(this)) {
+            if (!declineKeys.add(declined.ts + "|" + declined.name)) continue;
+            flow.add(new FlowEvent(FlowEvent.TABOO, declined.ts, declined.name, false));
+        }
+        try {
+            org.json.JSONArray memoryLogs = MemoryStore.snapshot(this).db.optJSONArray("logs");
+            Map<String, Integer> memoryCount = new HashMap<>();
+            Map<String, long[]> memoryRange = new HashMap<>();
+            Map<String, Boolean> memoryDone = new HashMap<>();
+            for (int i = 0; memoryLogs != null && i < memoryLogs.length(); i++) {
+                org.json.JSONObject log = memoryLogs.optJSONObject(i);
+                if (log == null) continue;
+                long at = log.optLong("ts");
+                if (at <= 0) continue;
+                String day = CycleSummary.day(at);
+                memoryCount.put(day, memoryCount.getOrDefault(day, 0) + 1);
+                long[] range = memoryRange.get(day);
+                if (range == null) memoryRange.put(day, new long[]{at, at});
+                else {
+                    range[0] = Math.min(range[0], at);
+                    range[1] = Math.max(range[1], at);
+                }
+                memoryDone.put(day, Boolean.TRUE.equals(memoryDone.get(day)) || log.optInt("rating") >= 3);
+            }
+            for (Map.Entry<String, long[]> e : memoryRange.entrySet()) {
+                flow.add(new FlowEvent(FlowEvent.MEMORY, e.getValue()[1],
+                        T.s("当天 ") + memoryCount.get(e.getKey()) + T.s(" 张"),
+                        Boolean.TRUE.equals(memoryDone.get(e.getKey())), memoryCount.get(e.getKey())));
+            }
+        } catch (RuntimeException ignored) {}
+        try {
+            org.json.JSONObject quizDays = QuizStore.snapshot(this).db.optJSONObject("days");
+            java.util.Iterator<String> quizDates = quizDays.keys();
+            while (quizDates.hasNext()) {
+                String day = quizDates.next();
+                org.json.JSONObject stats = quizDays.optJSONObject(day);
+                if (stats == null || stats.optInt("attempts") <= 0) continue;
+                java.util.Calendar end = java.util.Calendar.getInstance();
+                end.set(Integer.parseInt(day.substring(0, 4)),
+                        Integer.parseInt(day.substring(5, 7)) - 1,
+                        Integer.parseInt(day.substring(8, 10)), 0, 0, 0);
+                end.set(java.util.Calendar.MILLISECOND, 0);
+                end.add(java.util.Calendar.DAY_OF_MONTH, 1);
+                flow.add(new FlowEvent(FlowEvent.QUIZ, end.getTimeInMillis() - 1,
+                        T.s("当天 "), stats.optInt("correct") > 0, stats.optInt("attempts")));
+            }
+        } catch (RuntimeException ignored) {}
+        CardData cardData = CardStore.snapshot(this);
+        Map<String, String> cardTitle = new HashMap<>();
+        for (int i = 0; i < cardData.love().length(); i++) {
+            org.json.JSONObject love = cardData.love().optJSONObject(i);
+            if (love != null && !love.optString("id").isEmpty()) {
+                cardTitle.put(love.optString("id"), love.optString("title"));
+            }
+        }
+        for (int i = 0; i < cardData.earned().length(); i++) {
+            org.json.JSONObject ticket = cardData.earned().optJSONObject(i);
+            if (ticket == null || ticket.optLong("at") <= 0) continue;
+            flow.add(new FlowEvent(FlowEvent.LOVE, ticket.optLong("at"),
+                    cardTitle.getOrDefault(ticket.optString("card"), T.s("热爱卡")), true));
+        }
+        org.json.JSONArray summaryRecords = cardData.summary(System.currentTimeMillis()).records();
+        for (int i = 0; i < summaryRecords.length(); i++) {
+            org.json.JSONObject report = summaryRecords.optJSONObject(i);
+            if (report == null || report.optLong("at") <= 0) continue;
+            flow.add(new FlowEvent(FlowEvent.SUMMARY, report.optLong("at"),
+                    report.optString("label", T.s("周期总结")), true));
+        }
+        for (TodoStore.Todo todo : TodoStore.resolved(TodoStore.all(this))) {
+            flow.add(new FlowEvent(FlowEvent.TODO, todo.resolvedAt,
+                    TodoStore.displayTitle(todo), todo.status == TodoStore.STATUS_DONE));
         }
         java.util.Collections.sort(flow, new java.util.Comparator<Object>() {
             public int compare(Object a, Object b) {
                 long ta = a instanceof StudyStore.Rec ? ((StudyStore.Rec) a).ts
-                        : ((StudyGate.TabooClaim) a).ts;
+                        : ((FlowEvent) a).at;
                 long tb = b instanceof StudyStore.Rec ? ((StudyStore.Rec) b).ts
-                        : ((StudyGate.TabooClaim) b).ts;
+                        : ((FlowEvent) b).at;
                 return ta > tb ? -1 : (ta < tb ? 1 : 0);
             }
         });
@@ -399,7 +473,7 @@ public class HistoryActivity extends ThemedActivity {
         LinearLayout flowBody=new LinearLayout(this);flowBody.setOrientation(LinearLayout.VERTICAL);flowBody.setVisibility(View.GONE);recCard.addView(flowBody);
         flowToggle.setOnClickListener(v->{boolean open=flowBody.getVisibility()!=View.VISIBLE;flowBody.setVisibility(open?View.VISIBLE:View.GONE);flowToggle.setText(open?T.s("最近流水  ▾"):T.s("最近流水  ▸"));});
         TextView undoTip = new TextView(this);
-        undoTip.setText(T.s("当天的打卡可点记录撤回；昨天及更早的记录已锁定。红色是认领禁忌"));
+        undoTip.setText(T.s("当天的打卡可点记录撤回；昨天及更早的记录已锁定。红色是禁忌卡认领"));
         undoTip.setTextColor(TEXT3);
         undoTip.setTextSize(11);
         undoTip.setPadding(0, dp(2), 0, 0);
@@ -407,18 +481,48 @@ public class HistoryActivity extends ThemedActivity {
         if (flow.isEmpty()) {
             blank(flowBody, T.s("还没有打卡记录"));
         } else {
-            java.text.SimpleDateFormat md =
-                    new java.text.SimpleDateFormat("MM-dd", java.util.Locale.US);
+            java.text.SimpleDateFormat hm =
+                    new java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US);
             for (int i = 0; i < flow.size(); i++) {
                 final Object item = flow.get(i);
                 TextView rowT = new TextView(this);
                 rowT.setTextSize(13);
+                rowT.setMaxLines(2);
+                rowT.setEllipsize(android.text.TextUtils.TruncateAt.END);
                 rowT.setPadding(0, dp(8), 0, dp(8));
-                if (item instanceof StudyGate.TabooClaim) {
-                    StudyGate.TabooClaim tc = (StudyGate.TabooClaim) item;
-                    rowT.setText(md.format(new java.util.Date(tc.ts)) + T.s("  认领禁忌：") + tc.name);
-                    rowT.setTextColor(RED);
-                    // 禁忌认领没有「撤销」一说，认了就是认了
+                if (item instanceof FlowEvent) {
+                    FlowEvent event = (FlowEvent) item;
+                    String kind;
+                    String detail;
+                    int color = TEXT;
+                    if (event.kind == FlowEvent.SUMMARY) {
+                        kind = T.s("总结卡 · 完成");
+                        detail = event.title.isEmpty() ? T.s("周期总结") : event.title;
+                        color = RED;
+                    } else if (event.kind == FlowEvent.TABOO) {
+                        kind = event.done ? T.s("禁忌卡 · 认领") : T.s("禁忌卡 · 没做");
+                        detail = event.title;
+                        color = event.done ? RED : TEXT2;
+                    } else if (event.kind == FlowEvent.MEMORY) {
+                        kind = T.s("记忆卡 · 复习");
+                        detail = event.title;
+                        color = event.done ? GREEN : TEXT2;
+                    } else if (event.kind == FlowEvent.QUIZ) {
+                        kind = T.s("刷题卡 · 答题");
+                        detail = T.s("今天 ") + event.count + T.s(" 题");
+                        color = event.done ? GREEN : TEXT2;
+                    } else if (event.kind == FlowEvent.LOVE) {
+                        kind = T.s("热爱卡 · 领取");
+                        detail = event.title;
+                        color = TEXT;
+                    } else {
+                        kind = T.s("待办卡 · ") + (event.done ? T.s("完成") : T.s("取消"));
+                        detail = event.title;
+                        color = event.done ? GREEN : TEXT2;
+                    }
+                    rowT.setText(hm.format(new java.util.Date(event.at)) + "  " + kind
+                            + (detail.isEmpty() ? "" : T.s("：") + detail));
+                    rowT.setTextColor(color);
                 } else {
                     final StudyStore.Rec r = (StudyStore.Rec) item;
                     StudyStore.G g = goalById.get(r.goalId);
@@ -463,14 +567,16 @@ public class HistoryActivity extends ThemedActivity {
 
     private void renderPluginEntries() {
         if(pluginSection==null)return;
-        pluginSignature=HostRuntime.get(this).registry().signature();
+        pluginSignature=HostRuntime.get(this).registry().signature()+":"+com.afs.guard.plugins.BuiltInPluginStore.revision(this);
         pluginSection.removeAllViews();
-        List<PluginEntry> plugins = HostRuntime.get(this).registry()
-                .enabledPages(PluginProtocol.SLOT_HISTORY_MORE);
+        List<PluginEntry> plugins = new java.util.ArrayList<>(HostRuntime.get(this).registry()
+                .enabledPages(PluginProtocol.SLOT_HISTORY_MORE));
+        plugins.removeIf(e->"com.afs.plugin.usagestats".equals(e.packageName()));
         if (!plugins.isEmpty()) {
             LinearLayout moreCard = card(pluginSection);
             head(moreCard, T.s("更多"));
             for (final PluginEntry entry : plugins) {
+                if("com.afs.plugin.usagestats".equals(entry.packageName()))continue;
                 for (final PluginManifestParser.Page page : entry.manifest.pages) {
                     if (!PluginProtocol.SLOT_HISTORY_MORE.equals(page.slot)) continue;
                     Button statsBtn = new Button(this);
@@ -834,6 +940,26 @@ public class HistoryActivity extends ThemedActivity {
         t.setTextSize(12);
         t.setPadding(0, dp(4), 0, dp(4));
         card.addView(t);
+    }
+
+    /** 一条统一流水事件；非打卡动作也带时间戳进最近流水。 */
+    private static final class FlowEvent {
+        static final int SUMMARY = 0, MEMORY = 1, QUIZ = 2, LOVE = 3, TODO = 4, TABOO = 5;
+        final int kind;
+        final long at;
+        final String title;
+        final boolean done;
+        final int count;
+        FlowEvent(int kind, long at, String title, boolean done) {
+            this(kind, at, title, done, 1);
+        }
+        FlowEvent(int kind, long at, String title, boolean done, int count) {
+            this.kind = kind;
+            this.at = at;
+            this.title = title;
+            this.done = done;
+            this.count = count;
+        }
     }
 
     /** 撤销一笔打卡：两步确认防误触；删记录 → 闸门立刻重算 → hub 脏标记自动跟上。 */

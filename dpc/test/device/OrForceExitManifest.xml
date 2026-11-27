@@ -1,0 +1,1 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.afs.guard.quotaor"><application android:label="AFS OR Force Exit QA"/><instrumentation android:name="com.afs.guard.OrForceExitDeviceTest" android:targetPackage="com.afs.guard"/></manifest>

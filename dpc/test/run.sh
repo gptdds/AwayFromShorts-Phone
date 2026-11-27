@@ -7,6 +7,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Git Bash rewrites JVM classpath arguments containing Windows semicolons.
+# Prevent that conversion so java.exe sees the complete android.jar/tests classpath.
+case "$(uname -s)" in
+  MINGW*|MSYS*) export MSYS2_ARG_CONV_EXCL='*' ;;
+esac
+
 SDK="${AFS_SDK:-C:/Users/nj/.afs-android/sdk}"
 ANDROID_JAR="$SDK/platforms/android-34/android.jar"
 [ -f "$ANDROID_JAR" ] || { echo "找不到 $ANDROID_JAR" >&2; exit 1; }
@@ -50,6 +56,7 @@ package com.afs.guard;
 /** 离线回归用：空 token（测试不联网，也不该碰真凭据）。 */
 public final class BuildConfig {
     public static final String PREFILL_TOKEN = "";
+    public static final String VERSION_NAME = "offline-test";
     public static final boolean PLUGIN_TEST_MODE = false;
     public static final String PLUGIN_TRUST_SHA256 = "0c047b4af90f7d980852fa089f5384dea14c39df8f4bcf816adb254e8e74be97";
     public static final boolean PLUGIN_STATS_LEGACY = false;
@@ -60,13 +67,21 @@ package com.afs.guard;
 
 /** Minimal app-resource stub for offline source compilation; tests never inflate views. */
 public final class R {
+    public static final class id {
+        public static final int visual_card = 0x7f010001;
+        public static final int visual_page = 0x7f010002;
+    }
     public static final class drawable {
         public static final int startup_window = 0;
     }
 }
 EOF
 
-find java test/java "$OUT/gen" "$OUT/aidlgens" ../plugin-api/java -name '*.java' > "$OUT/sources.txt"
+find java test/java "$OUT/gen" "$OUT/aidlgens" ../plugin-api/java \
+  ../core/rules/src/main/java \
+  ../core/rules/src/test/java \
+  ../core/style-api/src/main/java ../style/fluidgradient/src/main/java ../style/liquidglass/src/main/java ../style/spatial3d/src/main/java \
+  -name '*.java' > "$OUT/sources.txt"
 if ! "$JAVAC" -encoding UTF-8 -nowarn --release 8 \
   -classpath "$ANDROID_JAR${SEP}libs/pdfbox-android-2.0.27.0.jar" -d "$OUT" @"$OUT/sources.txt" > "$OUT/javac.log" 2>&1; then
   cat "$OUT/javac.log" >&2
@@ -89,13 +104,30 @@ if [ -n "$JSON_JAR" ]; then
   RUN_CP="$JSON_JAR${SEP}$RUN_CP"
 fi
 
+for TEST in RuleEngineTest RuleMigrationTest RuleBackupTest; do
+  "$JAVA" -Dfile.encoding=UTF-8 -cp "$RUN_CP" "com.afs.core.rules.$TEST"
+done
+
 "$JAVA" -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 \
   -cp "$RUN_CP" com.afs.guard.GuardTest
 
-for TEST in ScreenLockTest PageRuleTest CheckinPenaltyTest RestReminderTest LockPlanTest UnlockCodeTest KeywordRuleTest KeyGateTest CapabilityTest PenaltyTimingTest AppUsageQuotaTest DailyQuotaTest PercentTextTest DayBoundaryTest TimeWindowTest NetWindowTest NetFallbackTest NetSlotTest ProxyRulesTest FocusPlanTest UpdateCheckTest CalendarDataTest FreezeRuleTest LedgerMergeTest MemoryTest MemoryFlashcardsTest MemoryStatsTest MemoryMomoModelTest MemorySwipeTest SpeechTest MemoryAuthoringTest TabOrderTest FreezeSlotTest QuizTest QuizImportTest DockSpringTest AppearanceTest MemoTest MemoEditorTest MemoChecklistTest MemoLibraryTest MemoBackupTest MemoTextFormatTest MemoBlocksTest MemoTableTest MemoSketchTest LearningPolicyTest CardDataTest SyncTargetTest LocalArchiveTest TranslationTest com.afs.host.plugins.PluginManifestTest com.afs.host.plugins.PluginSessionTest com.afs.host.plugins.PluginBoundsTest com.afs.host.plugins.PluginPrepareTest; do
+"$JAVA" -Dfile.encoding=UTF-8 -cp "$RUN_CP" com.afs.guard.PointerCoordinatesTest
+"$JAVA" -Dfile.encoding=UTF-8 -cp "$RUN_CP" com.afs.guard.GrayPolicyTest
+
+for TEST in ToolShelfModelTest FrameBudgetTest ScreenUsageTest ScreenLockTest PageRuleTest CheckinPenaltyTest RestReminderTest LockPlanTest UnlockCodeTest KeywordRuleTest KeyGateTest CapabilityTest PenaltyTimingTest AppUsageQuotaTest DailyQuotaTest MasterSwitchTest PercentTextTest DayBoundaryTest TimeWindowTest TemporaryPardonTest FreezeWarnTest NetWindowTest NetFallbackTest NetSlotTest ProxyRulesTest FocusPlanTest UpdateCheckTest CalendarDataTest FreezeRuleTest RuleParityTest LedgerMergeTest CrossContractTest MemoryTest MemoryFlashcardsTest MemoryStatsTest MemoryMomoModelTest MemorySwipeTest SpeechTest MemoryAuthoringTest AppPluginTest TabOrderTest FreezeSlotTest QuizTest QuizImportTest QuizReviewTest DockSpringTest AppearanceTest MemoTest MemoEditorTest MemoChecklistTest MemoLibraryTest MemoBackupTest MemoTextFormatTest MemoBlocksTest MemoTableTest MemoSketchTest TodoTest GoalDownTabooTest LearningPolicyTest LearningBindingsTest CardDataTest HomeVisibilityTest SyncTargetTest LocalArchiveTest LegacySnapshotParserTest TranslationTest com.afs.host.plugins.PluginManifestTest com.afs.host.plugins.PluginSessionTest com.afs.host.plugins.PluginBoundsTest com.afs.host.plugins.PluginPrepareTest; do
   case "$TEST" in
     *.*) CLASS="$TEST" ;;
     *) CLASS="com.afs.guard.$TEST" ;;
   esac
   "$JAVA" -Dfile.encoding=UTF-8 -cp "$RUN_CP" "$CLASS"
 done
+
+# Isolated asynchronous TTS boundary. Stub classes never enter the production APK/classpath.
+SPEECH_OUT="$OUT/speech-lifecycle"
+mkdir -p "$SPEECH_OUT"
+"$JAVAC" --release 8 -encoding UTF-8 -d "$SPEECH_OUT" \
+  java/com/afs/guard/Speech.java \
+  test/tts-stubs/android/content/Context.java \
+  test/tts-stubs/android/speech/tts/TextToSpeech.java \
+  test/tts-stubs/com/afs/guard/SpeechLifecycleTest.java
+"$JAVA" -Dfile.encoding=UTF-8 -cp "$SPEECH_OUT" com.afs.guard.SpeechLifecycleTest

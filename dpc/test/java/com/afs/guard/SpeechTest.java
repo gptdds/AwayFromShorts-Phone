@@ -31,6 +31,26 @@ public final class SpeechTest {
         eq("well-known", Speech.latinWord("well-known"), "hyphen");
         /* 中英混排取英文部分 */
         eq("suppress", Speech.latinWord("suppress 压制"), "mixed");
+        Speech.CardAutoplay auto=new Speech.CardAutoplay();
+        auto.show("card-a|day1","suppress");
+        eq("",auto.take("card-a|day1",false),"hidden card never queues pronunciation");
+        eq("suppress",auto.take("card-a|day1",true),"visible word plays automatically");
+        eq("",auto.take("card-a|day1",true),"same card does not repeat after focus/resume");
+        auto.show("card-a|day1","suppress");
+        eq("",auto.take("card-a|day1",true),"redraw does not repeat the same word");
+        auto.show("card-b|day1","household");
+        eq("",auto.take("card-a|day1",true),"stale card callback cannot read the next card");
+        eq("household",auto.take("card-b|day1",true),"next card reads its own word");
+        auto.show("card-c|day1","cancelled");auto.clear();
+        eq("",auto.take("card-c|day1",true),"leaving a page cancels queued pronunciation");
+        auto.show("card-d|day1","");eq("",auto.take("card-d|day1",true),"non-word card stays silent");
+        auto.show("card-e|day1","manual");auto.markSpoken("card-e|day1");
+        eq("",auto.take("card-e|day1",true),"manual replay suppresses delayed autoplay");
+        Speech.CardAutoplay recreated=new Speech.CardAutoplay();recreated.markSpoken(auto.saved());recreated.show("card-e|day1","manual");
+        eq("",recreated.take("card-e|day1",true),"recreation preserves pronunciation receipt");
+        auto.advance();auto.show("card-e|day1","manual");eq("manual",auto.take("card-e|day1",true),"new learning presentation can pronounce the same card again");
+        auto.show("card-e|day2","manual");eq("manual",auto.take("card-e|day2",true),"next day's card is a new presentation");
+
         /* 状态码 */
         check(Speech.OK == 0 && Speech.NO_TEXT == 1 && Speech.NO_ENGINE == 2 && Speech.NO_VOICE == 3, "status codes");
 

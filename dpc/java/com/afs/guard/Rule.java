@@ -1,5 +1,7 @@
 package com.afs.guard;
 
+import com.afs.core.rules.WeeklyRule;
+
 import java.util.Calendar;
 
 /**
@@ -31,6 +33,11 @@ public final class Rule {
      */
     public final boolean gate;
     private final int[][] windows;   // 每段 {start, end}，已规范化，按 start 升序
+    /**
+     * 判定本身交给共享核心 com.afs.core.rules.WeeklyRule —— 无障碍版读的是同一份实现，
+     * 两个 APK 不允许各算一套。这里只保留 DO 特有的 gate / freeze 语义。
+     */
+    private final WeeklyRule core;
 
     public Rule(int days, int[][] windows) {
         this(days, windows, autoGate(windows));
@@ -45,6 +52,9 @@ public final class Rule {
         this.windows = normalize(windows);
         this.gate = gate;
         this.freeze = freeze;
+        this.core = freeze
+                ? WeeklyRule.freeze(this.days, this.windows)
+                : WeeklyRule.allow(this.days, this.windows);
     }
 
     /** 单段便捷构造。 */
@@ -62,50 +72,12 @@ public final class Rule {
      * 放行十几个小时 → 日常工具（微信/相机/文件管理），不该被学习目标牵连。
      */
     public static boolean autoGate(int[][] wins) {
-        int total = 0;
-        if (wins != null) {
-            for (int i = 0; i < wins.length; i++) {
-                if (wins[i] == null || wins[i].length < 2) {
-                    continue;
-                }
-                int s = norm(wins[i][0]);
-                int e = norm(wins[i][1]);
-                if (s == e) {
-                    total += 24 * 60;            // 起止相同 = 全天
-                } else if (s < e) {
-                    total += e - s;
-                } else {
-                    total += (24 * 60 - s) + e;  // 跨午夜
-                }
-            }
-        }
+        int total = WeeklyRule.allow(ALL_DAYS, wins).totalWindowMinutes();
         return total > 0 && total <= GATE_MAX_MINUTES;
     }
 
     private static int[][] normalize(int[][] in) {
-        int[][] tmp = new int[in == null ? 0 : in.length][2];
-        int n = 0;
-        for (int i = 0; i < tmp.length; i++) {
-            if (in[i] == null || in[i].length < 2) {
-                continue;
-            }
-            tmp[n][0] = norm(in[i][0]);
-            tmp[n][1] = norm(in[i][1]);
-            n++;
-        }
-        int[][] out = new int[n][2];
-        System.arraycopy(tmp, 0, out, 0, n);
-        // 按 start 升序，展示与比较都稳定
-        for (int i = 1; i < out.length; i++) {
-            int[] cur = out[i];
-            int j = i - 1;
-            while (j >= 0 && out[j][0] > cur[0]) {
-                out[j + 1] = out[j];
-                j--;
-            }
-            out[j + 1] = cur;
-        }
-        return out;
+        return WeeklyRule.normalize(in);
     }
 
     public int windowCount() {
@@ -281,55 +253,17 @@ public final class Rule {
 
     /** 此刻是否在任一放行窗口里。 */
     public boolean inWindow(Calendar c) {
-        return freeze ? !matchesWindow(c) : matchesWindow(c);
-    }
-
-    private boolean matchesWindow(Calendar c) {
-        int mod = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE);
-        int today = monIndex(c);
-        int yesterday = (today + 6) % 7;
-        for (int i = 0; i < windows.length; i++) {
-            int s = windows[i][0];
-            int e = windows[i][1];
-            if (s == e) {
-                // 起止相同：选中的星期全天放行
-                if (dayOn(days, today)) {
-                    return true;
-                }
-            } else if (s < e) {
-                if (dayOn(days, today) && mod >= s && mod < e) {
-                    return true;
-                }
-            } else {
-                // 跨午夜：晚上那段算今天，凌晨那段算昨天
-                boolean evening = dayOn(days, today) && mod >= s;
-                boolean morning = dayOn(days, yesterday) && mod < e;
-                if (evening || morning) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        return !core.blocked(monIndex(c), c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE));
     }
 
     /**
      * 下一次状态翻转的时刻（毫秒）。
      *
-     * 逐分钟扫，最多扫 8 天。多段窗口下解析式"跳到下一边界"的算法容易算错
-     * （段与段、日与日之间都要比较），逐分钟扫 11520 次是微秒级，没必要优化。
+     * 逐分钟扫由共享核心负责（见 WeeklyRule.nextFlip）；这里保留方法是为了
+     * 现存的调用点与测试不用改，语义仍是"下一次拦截状态变化"。
      */
     public long nextFlip(Calendar now) {
-        Calendar t = (Calendar) now.clone();
-        t.set(Calendar.SECOND, 0);
-        t.set(Calendar.MILLISECOND, 0);
-        boolean cur = inWindow(t);
-        for (int i = 0; i < 8 * 1440 + 2; i++) {
-            t.add(Calendar.MINUTE, 1);
-            if (inWindow(t) != cur) {
-                return t.getTimeInMillis();
-            }
-        }
-        return now.getTimeInMillis() + 3600000L;
+        return core.nextFlip(now.getTimeInMillis(), now.getTimeZone());
     }
 
     /* ---------- 文案 ---------- */

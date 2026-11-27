@@ -223,15 +223,22 @@ public final class Hub {
                 .put("start", StudyStore.spanStart(c))
                 .put("end", StudyStore.spanEnd(c)));
         String localHash = sha256(local.toString());
+        JSONObject localContract = CrossContract.info(c);
+        String localContractHash = localContract.getString("contractHash");
 
         JSONObject hub = Gist.readConfig(session);
         JSONObject phone = hub.optJSONObject("phone");
         String hubHash = phone == null ? "" : phone.optString("hash", "");
+        JSONObject hubContract = phone == null ? null : phone.optJSONObject("contract");
+        String hubContractHash = hubContract == null ? "" : hubContract.optString("contractHash", "");
         String stored = sp(c).getString("cfg_hash", "");
         boolean cfgDirty = sp(c).getBoolean("cfg_dirty", false);
+        boolean contractSame = hubContractHash.equals(localContractHash);
 
-        if (hubHash.equals(localHash)) {
-            sp(c).edit().putString("cfg_hash", localHash).putBoolean("cfg_dirty", false).apply();
+        if (hubHash.equals(localHash) && contractSame) {
+            sp(c).edit().putString("cfg_hash", localHash)
+                    .putString("cfg_contract_hash", localContractHash)
+                    .putBoolean("cfg_dirty", false).apply();
             return;
         }
         boolean localNewer = (hubHash.equals(stored) && !stored.isEmpty()) || cfgDirty
@@ -240,6 +247,7 @@ public final class Hub {
             // 只有 hub 变了 → 拉回来应用
             JSONObject cfg = phone == null ? null : phone.optJSONObject("config");
             if (cfg != null) {
+                String externalBefore = ExternalAdjustment.snapshot(c);
                 JSONObject rules = cfg.optJSONObject("rules");
                 if (rules != null) {
                     RuleStore.importRules(c, rules.toString());
@@ -249,29 +257,48 @@ public final class Hub {
                     StudyStore.setSpan(c, study.optString("start", "22:00"),
                             study.optString("end", "23:00"));
                 }
+                ExternalAdjustment.recordIfChanged(c, externalBefore, T.s("云端配置"));
                 StudyGate.invalidate(c);
                 try {
                     Guard.apply(c);
                 } catch (Throwable ignored) {
                 }
             }
-            sp(c).edit().putString("cfg_hash", localHash).apply();
-            Log.i(TAG, "hub config pulled (phone section)");
+            if (!contractSame) {
+                JSONObject nextPhone = phone == null ? new JSONObject() : new JSONObject(phone.toString());
+                nextPhone.put("updated", stamp())
+                        .put("writtenBy", "phone")
+                        .put("hash", localHash)
+                        .put("contract", localContract);
+                hub.put("phone", nextPhone);
+                hub.put("rev", hub.optInt("rev", 0) + 1);
+                hub.put("updated", stamp());
+                String err = Gist.patchFiles(session, singleton("hub-config.json", hub.toString()));
+                if (err != null) throw new IllegalStateException("contract push: " + err);
+            }
+            sp(c).edit().putString("cfg_hash", localHash)
+                    .putString("cfg_contract_hash", localContractHash).apply();
+            Log.i(TAG, "hub config pulled (phone section), contract published");
             return;
         }
 
         // 本地新（或首次/冲突，本地赢）：读-改-写，只换 phone 分节
-        hub.put("phone", new JSONObject()
-                .put("updated", stamp())
+        JSONObject nextPhone = phone == null ? new JSONObject() : new JSONObject(phone.toString());
+        nextPhone.put("updated", stamp())
                 .put("writtenBy", "phone")
                 .put("hash", localHash)
-                .put("config", local));
+                .put("config", local)
+                .put("contract", localContract);
+        hub.put("phone", nextPhone);
         hub.put("rev", hub.optInt("rev", 0) + 1);
         hub.put("updated", stamp());
         String err = Gist.patchFiles(session, singleton("hub-config.json", hub.toString()));
         if (err == null) {
-            sp(c).edit().putString("cfg_hash", localHash).putBoolean("cfg_dirty", false).apply();
-            Log.i(TAG, "hub config pushed (phone section)");
+            sp(c).edit().putString("cfg_hash", localHash)
+                    .putString("cfg_contract_hash", localContractHash)
+                    .putBoolean("cfg_dirty", false).apply();
+            Log.i(TAG, "hub config pushed (phone section) contract="
+                    + localContractHash.substring(0, 12));
         } else {
             throw new IllegalStateException("config push: " + err);
         }

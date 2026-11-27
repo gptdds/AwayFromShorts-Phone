@@ -323,6 +323,27 @@ public class AppPickerActivity extends ThemedActivity {
                     e.checked = picked.contains(pkg);
                     found.add(e);
                 }
+                // 没有桌面入口的应用（多桌面、组件被隐藏、只是普通服务）也要留在列表里：
+                // 它们本来是额度成员时，光靠 launcher 查询会整只消失，导致成员被悄悄丢掉。
+                List<String> extra = new ArrayList<>();
+                if (picked != null)
+                    for (String pkg : picked) if (pkg != null && !pkg.isEmpty() && !seen.contains(pkg)
+                            && (candidates == null || candidates.contains(pkg))) extra.add(pkg);
+                if (candidates != null)
+                    for (String pkg : candidates) if (pkg != null && !pkg.isEmpty() && !seen.contains(pkg)) extra.add(pkg);
+                for (String pkg : extra) {
+                    if (pkg.equals(getPackageName()) || !seen.add(pkg)) continue;
+                    Entry e = new Entry();
+                    e.pkg = pkg;
+                    e.label = Guard.labelOf(pm, pkg);
+                    e.lower = (e.label + " " + pkg).toLowerCase(Locale.ROOT);
+                    try {
+                        e.icon = pm.getApplicationIcon(pkg);
+                    } catch (Throwable ignored) {
+                    }
+                    e.checked = picked != null && picked.contains(pkg);
+                    found.add(e);
+                }
             } catch (Throwable ignored) {
             }
             Collections.sort(found, order());

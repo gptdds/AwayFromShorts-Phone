@@ -20,6 +20,15 @@ import java.util.Set;
  */
 public class BlockerService extends AccessibilityService {
 
+    private static volatile BlockerService connected;
+    private volatile boolean active;
+    private final java.util.concurrent.atomic.AtomicBoolean reaping = new java.util.concurrent.atomic.AtomicBoolean();
+
+    static void recheck() {
+        BlockerService service = connected;
+        if (service != null) service.handler.post(service::check);
+    }
+
     private static final String TAG = "AfsBlocker";
 
     /** 后台复活巡检间隔（毫秒） */
@@ -37,6 +46,7 @@ public class BlockerService extends AccessibilityService {
         @Override
         public void run() {
             // 处理"人一直停在被管 App 里，跨过边界"的情况：事件不会再来了，只能定时查
+            RuntimeStatus.tickAt = android.os.SystemClock.elapsedRealtime();
             check();
             handler.postDelayed(this, Guard.TICK_MS);
         }
@@ -58,6 +68,9 @@ public class BlockerService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        active = true;
+        connected = this;
+        RuntimeStatus.connected = true;
         try {
             // 服务先起来时也要主动要 binder，否则 force-stop 永远走不通
             ShizukuBridge.ensureBinder(this);
@@ -98,9 +111,7 @@ public class BlockerService extends AccessibilityService {
             return;
         }
         long now = System.currentTimeMillis();
-        int mod = Guard.minuteOfDay(Calendar.getInstance());
-        if (!Guard.isBlocked(mod, now, Store.forceUntil(this),
-                Store.startMin(this), Store.endMin(this))) {
+        if (!Rules.blocked(this, pkg, now)) {
             return;
         }
         kick(pkg);
@@ -116,6 +127,7 @@ public class BlockerService extends AccessibilityService {
         // 踢成功就把 lastPkg 清掉：否则 3 秒一次的巡检会一直对着一个已经不在前台的包反复按 Home，
         // 表现为在桌面上每 3 秒被按一次 Home（打开抽屉 / 最近任务也会被顶掉）。
         boolean ok = performGlobalAction(GLOBAL_ACTION_HOME);
+        RuntimeStatus.result(this,ok,"退出应用到桌面 · " + pkg);
         if (ok) {
             lastPkg = null;
         }
@@ -143,10 +155,11 @@ public class BlockerService extends AccessibilityService {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                if (!active || !Rules.blocked(BlockerService.this, pkg, System.currentTimeMillis())) return;
                 if (forceStopViaShizuku(pkg)) {
                     return;
                 }
-                killBg(pkg);
+                if(active && Rules.blocked(BlockerService.this,pkg,System.currentTimeMillis()))killBg(pkg);
             }
         }, "afs-kill").start();
     }
@@ -158,6 +171,8 @@ public class BlockerService extends AccessibilityService {
      */
     private boolean forceStopViaShizuku(String pkg) {
         try {
+            if (!active || !com.afs.core.rules.RuleJson.packageName(pkg)
+                    || !Rules.blocked(this,pkg,System.currentTimeMillis())) return false;
             ShizukuBridge.ensureBinder(this);
             if (!rikka.shizuku.Shizuku.pingBinder()) {
                 return false;
@@ -172,10 +187,12 @@ public class BlockerService extends AccessibilityService {
             String out = drain(p.getInputStream());
             String err = drain(p.getErrorStream());
             int code = p.waitFor();
+            RuntimeStatus.result(this,code == 0,"强化停止 · " + pkg + " · exit=" + code);
             Log.i(TAG, "force-stop " + pkg + " exit=" + code
                     + " out=[" + out + "] err=[" + err + "]");
             return code == 0;
         } catch (Throwable t) {
+            RuntimeStatus.result(this,false,"强化停止失败 · " + t.getClass().getSimpleName());
             Log.w(TAG, "shizuku failed: " + t);
             return false;
         }
@@ -201,24 +218,16 @@ public class BlockerService extends AccessibilityService {
     private void reapOnce() {
         try {
             long now = System.currentTimeMillis();
-            int mod = Guard.minuteOfDay(Calendar.getInstance());
-            if (!Guard.isBlocked(mod, now, Store.forceUntil(this),
-                    Store.startMin(this), Store.endMin(this))) {
-                return;
-            }
             final java.util.Set<String> targets = Store.targets(this);
             if (targets.isEmpty()) {
                 return;
             }
-            final StringBuilder cmd = new StringBuilder();
-            for (String p : targets) {
-                cmd.append("if pidof ").append(p).append(" >/dev/null 2>&1; then am force-stop ")
-                        .append(p).append("; echo K:").append(p).append("; fi; ");
-            }
+            if(!reaping.compareAndSet(false,true))return;
             new Thread(new Runnable() {
                 @Override
                 public void run() {
                     try {
+                        if (!active) return;
                         ShizukuBridge.ensureBinder(BlockerService.this);
                         if (!rikka.shizuku.Shizuku.pingBinder()) {
                             return;
@@ -227,15 +236,19 @@ public class BlockerService extends AccessibilityService {
                                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                             return;
                         }
-                        rikka.shizuku.ShizukuRemoteProcess rp = rikka.shizuku.Shizuku.newProcess(
-                                new String[] {"/system/bin/sh", "-c", cmd.toString()}, null, null);
-                        String out = drain(rp.getInputStream());
-                        rp.waitFor();
-                        if (out.contains("K:")) {
-                            Log.i(TAG, "reaped " + out);
+                        for (String pkg : targets) {
+                            if (!active) return;
+                            if (com.afs.core.rules.RuleJson.packageName(pkg)
+                                    && Rules.blocked(BlockerService.this, pkg, System.currentTimeMillis())) {
+                                rikka.shizuku.ShizukuRemoteProcess probe = rikka.shizuku.Shizuku.newProcess(new String[]{"pidof",pkg},null,null);
+                                drain(probe.getInputStream());
+                                if (probe.waitFor() == 0) forceStopViaShizuku(pkg);
+                            }
                         }
                     } catch (Throwable t) {
                         Log.w(TAG, "reap failed: " + t);
+                    } finally {
+                        reaping.set(false);
                     }
                 }
             }, "afs-reap").start();
@@ -263,8 +276,19 @@ public class BlockerService extends AccessibilityService {
 
     @Override
     public boolean onUnbind(android.content.Intent intent) {
-        handler.removeCallbacks(tick);
-        handler.removeCallbacks(reap);
+        disconnect();
         return super.onUnbind(intent);
+    }
+
+    private void disconnect() {
+        active = false;
+        RuntimeStatus.connected = false;
+        if (connected == this) connected = null;
+        handler.removeCallbacksAndMessages(null);
+    }
+
+    @Override public void onDestroy() {
+        disconnect();
+        super.onDestroy();
     }
 }

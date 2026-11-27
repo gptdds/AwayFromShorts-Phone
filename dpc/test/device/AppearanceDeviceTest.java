@@ -49,7 +49,7 @@ public final class AppearanceDeviceTest extends Instrumentation {
         int records=StudyStore.recs(context).size();float systemScale=context.getApplicationContext().getResources().getConfiguration().fontScale;
         Throwable failure=null;
         try {
-            AppearanceConfig a=ThemeStore.load(context);a.skin="classic";a.mode="dark";a.pureBlack=true;a.seed=0xFFFF9500;
+            AppearanceConfig a=ThemeStore.load(context);a.mode="dark";a.pureBlack=true;a.seed=0xFFFF9500;
             for(String style:new String[]{"vivid","tinted","soft","monochrome"}){
                 a.style=style;ThemeStore.save(context,a);Activity activity=open(MainActivity.class);
                 ui(()->{Ui ui=new Ui(activity);check(ui.dark&&ui.bg()==0xFF000000,"pure-black mode is applied on an actual activity");
@@ -82,20 +82,17 @@ public final class AppearanceDeviceTest extends Instrumentation {
                 preview.dispatchTouchEvent(down);preview.dispatchTouchEvent(up);down.recycle();up.recycle();
                 check(preview.selected()==3&&!settings.isFinishing(),"live preview changes miniature tabs without leaving settings");
             }catch(Exception e){throw new RuntimeException(e);}});
-            a.skin="amap";a.mode="light";a.pureBlack=false;a.style="vivid";a.amapSeed=AppearanceConfig.AMAP_COLOR;a.font="";a.floating=true;ThemeStore.save(context,a);
+            a.mode="light";a.pureBlack=false;a.style="vivid";a.amapSeed=AppearanceConfig.AMAP_COLOR;a.font="";a.floating=true;ThemeStore.save(context,a);
             for(Class<? extends Activity> type:new Class[]{MainActivity.class,MemoryActivity.class,QuizActivity.class,FreezeBoardActivity.class,CheckinActivity.class}){
                 Activity activity=open(type);
-                ui(()->{try{Ui look=new Ui(activity);check(look.amap&&look.bg()==0xFFF5F6F7&&look.accent()==AppearanceConfig.AMAP_COLOR,"Amap appearance reaches actual "+type.getSimpleName());
+                ui(()->{try{Ui look=new Ui(activity);check(look.amap&&look.bg()==0xFFFAFAF9&&look.accent()==AppearanceConfig.AMAP_COLOR,"paper appearance reaches actual "+type.getSimpleName());
                     FloatingNav nav=dock(activity);check(nav!=null&&nav.floating(),"Amap dock is attached to "+type.getSimpleName());
                 }catch(Exception e){throw new RuntimeException(e);}});
             }
             a.mode="dark";ThemeStore.save(context,a);Activity night=open(MainActivity.class);
-            ui(()->{Ui look=new Ui(night);check(look.amap&&look.dark&&look.bg()==0xFF101418,"Amap night mode reaches actual page");check(text(night.getWindow().getDecorView(),"守卫")!=null,"Amap uses the guard page heading");});
+            ui(()->{Ui look=new Ui(night);check(look.amap&&look.dark&&look.bg()==0xFF141415,"paper night mode reaches actual page");check(text(night.getWindow().getDecorView(),"守卫")!=null,"paper uses the guard page heading");});
             a.pureBlack=true;ThemeStore.save(context,a);Activity black=open(ThemeActivity.class);
-            ui(()->check(new Ui(black).bg()==0xFF000000,"Amap pure black works in settings too"));
-            a.skin="classic";ThemeStore.save(context,a);Activity classic=open(MainActivity.class);
-            ui(()->check(!new Ui(classic).amap&&text(classic.getWindow().getDecorView(),"设置")!=null,"switching back restores classic page structure"));
-            check(ThemeStore.load(context).seed==0xFFFF3B30,"Amap does not overwrite the prior classic accent");
+            ui(()->check(new Ui(black).bg()==0xFF000000,"paper pure black works in settings too"));
             a.mode="light";a.pureBlack=false;ThemeStore.save(context,a);
             Class[] pageTypes={MainActivity.class,MemoryActivity.class,QuizActivity.class,FreezeBoardActivity.class};
             String[] pageTitles={"设置","本日记忆闪卡","刷题","冻结应用"};

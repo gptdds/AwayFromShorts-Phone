@@ -49,6 +49,7 @@ public final class QuizStore {
             out=f.startWrite();out.write(bytes);f.finishWrite(out);
             cache=new QuizData(candidate.db.toString());path=c.getFilesDir().getAbsolutePath();
         }catch(Exception e){if(out!=null)f.failWrite(out);throw new IllegalStateException(T.s("保存失败，本次操作尚未记录"),e);}
+        StudyGate.invalidate(c);
     }
     public static String read(InputStream in,int max) throws IOException {
         if(in==null)throw new IOException(T.s("无法打开文件"));

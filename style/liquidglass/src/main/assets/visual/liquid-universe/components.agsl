@@ -1,0 +1,42 @@
+uniform shader image;
+uniform float2 textureSize, resolution, extent, origin, finger;
+uniform float time, pressure, releaseAge, material, pageAge;
+
+half3 environment(float2 uv) {
+    float2 sample=clamp(uv,0.,1.)*textureSize;
+    return (image.eval(sample).rgb+image.eval(sample+float2(90.,0.)).rgb+image.eval(sample-float2(90.,0.)).rgb+image.eval(sample+float2(0.,90.)).rgb+image.eval(sample-float2(0.,90.)).rgb)*.2;
+}
+
+half4 main(float2 point) {
+    float2 uv=point/extent;
+    float2 centered=point-extent*.5;
+    float inset=3.;
+    float radius=(material==4.||material==5.||material==8.)?min(extent.x,extent.y)*.5-3.:min(extent.y*.34,28.);
+    float2 outside=abs(centered)-(extent*.5-radius-inset);
+    float distance=length(max(outside,0.))+min(max(outside.x,outside.y),0.)-radius;
+    float thickness=material==2.||material==7.?16.:9.;
+    float edge=1.-smoothstep(0.,thickness,-distance);
+    float2 normal=normalize(centered/max(extent*.5,1.)+float2(.0001));
+    float2 touch=uv-finger;
+    float dent=exp(-dot(touch,touch)*18.)*pressure;
+    float wave=sin(length(touch)*32.-releaseAge*14.)*exp(-abs(length(touch)-releaseAge*.6)*14.)*exp(-releaseAge*4.);
+    float2 opticalUV=clamp(uv*.32+float2(.27,.30)+normal*edge*.10+touch*dent*.11+normal*wave*.018,0.,1.);
+    float dispersion=edge*.009;
+    half3 reflected=half3(environment(opticalUV+normal*dispersion).r,environment(opticalUV).g,environment(opticalUV-normal*dispersion).b);
+    float3 surfaceNormal=normalize(float3(normal*edge*.85,1.-edge*.4));
+    float3 light=normalize(float3(finger.x-.3,.25-finger.y,1.));
+    float specular=pow(max(dot(surfaceNormal,light),0.),24.);
+    float rim=pow(edge,4.);
+    float sheen=exp(-abs(uv.y-(.14+uv.x*.15+sin(time*.35)*.025))*26.);
+    half3 base=half3(.035,.055,.072);
+    if(material==0.) base=half3(.16,.26,.32);
+    if(material==3.) base=half3(.018,.028,.038);
+    if(material==4.) base=half3(.32,.42,.48);
+    base=mix(base,half3(.13,.27,.33),pageAge*.4);
+    half3 color=base+reflected*(material==3.?.025:.065)+half3(.20,.25,.29)*specular*.35;
+    color+=half3(.62,.76,.84)*rim*.65+half3(.35,.47,.52)*sheen*(material==3.?.05:.22);
+    color*=1.-dent*.17;
+    if(material==3.) color+=half3(.1,.22,.3)*edge*pageAge;
+    float alpha=1.-smoothstep(-1.5,0.,distance);
+    return half4(color*alpha,alpha);
+}

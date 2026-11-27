@@ -15,7 +15,9 @@ public final class CardStore {
         if(file.getBaseFile().exists()||new File(file.getBaseFile()+".bak").exists()){
             try(InputStream in=file.openRead();ByteArrayOutputStream out=new ByteArrayOutputStream()){
                 byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1){if(out.size()+n>8*1024*1024)throw new IOException(T.s("卡管理记录超过 8MB"));out.write(b,0,n);}
-                cache=new CardData(out.toString("UTF-8"));path=current;return cache;
+                cache=new CardData(out.toString("UTF-8"));path=current;
+                if(cache.migrated)commit(c,cache);   // 旧抽奖账本转成券后立刻落盘
+                return cache;
             }catch(Exception e){cache=null;throw new IllegalStateException(T.s("卡管理读取失败，原文件已保留"),e);}
         }
         long now=System.currentTimeMillis();CardData fresh=new CardData(now);
@@ -32,11 +34,33 @@ public final class CardStore {
     public static synchronized CardData snapshot(Context c){return new CardData(data(c).db.toString());}
     public static synchronized void saveLove(Context c,String id,String title,int reward){CardData next=snapshot(c);next.saveLove(id,title,reward);commit(c,next);}
     public static synchronized void archive(Context c,String id,boolean archived){CardData next=snapshot(c);next.archive(id,archived);commit(c,next);}
-    public static synchronized boolean claim(Context c,String id){CardData next=snapshot(c);boolean changed=next.claim(id,System.currentTimeMillis());if(changed)commit(c,next);return changed;}
+    /** 旧入口不能绕过拍照门禁；调用方必须传本次相机保存下来的照片路径。 */
+    public static synchronized boolean claim(Context c,String id){
+        throw new IllegalArgumentException(T.s("先拍一张照片才能领取热爱卡"));
+    }
+    public static synchronized boolean claim(Context c,String id,String photoPath){
+        if(photoPath==null||photoPath.trim().isEmpty())throw new IllegalArgumentException(T.s("先拍一张照片才能领取热爱卡"));
+        File photo=new File(photoPath);
+        if(!photo.isFile()||photo.length()<=0L)throw new IllegalArgumentException(T.s("照片没有保存成功，请重拍"));
+        CardData next=snapshot(c);boolean changed=next.claim(id,System.currentTimeMillis(),photo.getAbsolutePath());if(changed)commit(c,next);return changed;
+    }
     public static synchronized long rewardUntil(Context c,long now){try{return data(c).rewardUntil(now);}catch(RuntimeException e){return 0;}}
-    public static synchronized boolean reconcile(Context c,long now,boolean eligible,long boundary){CardData next=snapshot(c);boolean changed=next.reconcile(now,eligible,boundary);if(changed)commit(c,next);return next.rewardUntil(now)>0;}
+    /** Rewards stay unbound unless the user enables them in learning-link bindings. */
+    public static synchronized boolean canUse(Context c,Calendar now){
+        return !LearningBindings.targetReward(c)||!StudyGate.unfinishedNow(c,now);
+    }
+    /** 用掉该卡一张券，开一段时段冻结豁免；返回分钟数，0=没券。 */
+    public static synchronized int use(Context c,String cardId){
+        Calendar now=GuardClock.now(c);
+        if(!canUse(c,now))throw new IllegalStateException(T.s("今日学习目标未完成，奖励卡暂不能使用"));
+        long stamp=now.getTimeInMillis();
+        CardData next=snapshot(c);int minutes=next.use(cardId,stamp);
+        if(minutes>0)commit(c,next);
+        else if(next.waitingTickets(cardId,stamp)>0)throw new IllegalStateException(T.s("热爱券领取满 24 小时后才能使用"));
+        return minutes;
+    }
     public static synchronized CycleSummary.Period summaryPending(Context c,long now){try{return data(c).summary(now).pending(now);}catch(RuntimeException e){return null;}}
-    public static synchronized java.util.List<CycleSummary.Period> summariesPending(Context c,long now){return data(c).summary(now).allPending(now);}
+    public static synchronized java.util.List<CycleSummary.Period> summariesPending(Context c,long now){try{return data(c).summary(now).allPending(now);}catch(RuntimeException e){return null;}}
     public static synchronized boolean summaryHolding(Context c,long now){CycleSummary.Period p=summaryPending(c,now);return p!=null&&p.holds(now);}
     public static synchronized void configureSummary(Context c,String mode,int days,String anchor){CardData next=snapshot(c);next.summary(System.currentTimeMillis()).configure(mode,days,anchor,System.currentTimeMillis());commit(c,next);}
     public static synchronized void configureSummaries(Context c,java.util.Set<String> selected,int days,String anchor){CardData next=snapshot(c);long now=System.currentTimeMillis();next.summary(now).configureAll(selected,days,anchor,now);commit(c,next);}

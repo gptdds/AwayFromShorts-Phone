@@ -3,7 +3,8 @@ package com.afs.guard;
 /**
  * 定时提醒的判定。
  *
- * 钉四件事：间隔到没到、首次不弹、四种不该打扰的情况、以及改间隔后重新起算。
+ * 钉五件事：间隔到没到、首次不弹、四种不该打扰的情况、改间隔后重新起算、
+ * 以及弹窗被进程死亡带走后的补弹判定。
  * 时间全部用毫秒直算，不依赖任何 Android 类。
  */
 public final class RestReminderTest {
@@ -69,6 +70,67 @@ public final class RestReminderTest {
             if (got) fired++;
         }
         ok(fired == 1, "exactly one combination fires: " + fired);
+
+        // ---- revive：弹窗被进程死亡带走后的补弹 ----
+        // 场景：提醒弹着，用户把守卫从最近任务划掉（或一键清理），页面随进程一起没了。
+        // 走正当渠道关掉的会把 live 记号撤掉；没撤就说明这条还没算数，要补弹。
+        ok(!RestReminder.revive(false, false, true, true, false, false),
+                "no live mark, nothing to revive");
+        ok(!RestReminder.revive(true, true, true, true, false, false),
+                "popup already on screen, no revive");
+        ok(!RestReminder.revive(true, false, false, true, false, false),
+                "outside window: stale mark, not revived");
+        ok(!RestReminder.revive(true, false, true, false, false, false),
+                "screen off stays quiet");
+        ok(!RestReminder.revive(true, false, true, true, true, false),
+                "while locked stays quiet");
+        ok(!RestReminder.revive(true, false, true, true, false, true),
+                "during unlock pass stays quiet");
+        ok(RestReminder.revive(true, false, true, true, false, false),
+                "killed popup comes back once conditions return");
+
+        // 六个条件全满足才补弹
+        int revived = 0;
+        for (int mask = 0; mask < 64; mask++) {
+            boolean live = (mask & 1) != 0;
+            boolean showing = (mask & 2) != 0;
+            boolean win = (mask & 4) != 0;
+            boolean screen = (mask & 8) != 0;
+            boolean locked = (mask & 16) != 0;
+            boolean pass = (mask & 32) != 0;
+            boolean got = RestReminder.revive(live, showing, win, screen, locked, pass);
+            boolean want = live && !showing && win && screen && !locked && !pass;
+            ok(got == want, "revive truth table mask=" + mask);
+            if (got) revived++;
+        }
+        ok(revived == 1, "exactly one combination revives: " + revived);
+
+        // ---- 亮屏累计：从亮屏起算，息屏清零 ----
+        long gap = ScreenLock.MAX_GAP;
+        long t0 = 2_000_000L;
+        ok(RestReminder.accumulate(0L, t0, t0 + 10_000L, true, true, gap) == 10_000L,
+                "screen on accumulates one tick");
+        ok(RestReminder.accumulate(10_000L, t0 + 10_000L, t0 + 20_000L, true, true, gap) == 20_000L,
+                "consecutive screen-on ticks add up");
+        ok(RestReminder.accumulate(200_000L, t0, t0 + 10_000L, false, true, gap) == 0L,
+                "screen off clears the whole round");
+        ok(RestReminder.accumulate(200_000L, t0, t0 + 10_000L, true, false, gap) == 200_000L,
+                "not counting pauses without clearing");
+        ok(RestReminder.accumulate(0L, 0L, t0, true, true, gap) == 0L,
+                "first tick after screen on only marks the start");
+        ok(RestReminder.accumulate(0L, t0, t0 + 10L * gap, true, true, gap) == gap,
+                "long gap is clamped instead of charging screen-off time");
+        ok(RestReminder.accumulate(0L, t0, t0 - 5_000L, true, true, gap) == 0L,
+                "clock moved backwards adds nothing");
+        ok(RestReminder.dueAccum(minutes(45), 45), "exactly 45 min of screen time is due");
+        ok(!RestReminder.dueAccum(minutes(44), 45), "44 min is not due");
+        ok(!RestReminder.dueAccum(minutes(60), 0), "zero interval never due");
+        ok(RestReminder.shouldFireAccum(true, true, true, false, false, minutes(45), 45),
+                "due screen time fires");
+        ok(!RestReminder.shouldFireAccum(true, true, false, false, false, minutes(45), 45),
+                "screen off never fires");
+        ok(!RestReminder.shouldFireAccum(true, true, true, false, false, 0L, 45),
+                "fresh screen-on does not fire immediately");
 
         // ---- minutes 文案 ----
         ok(RestReminder.minutes(45).contains("45"), "minutes text carries the number");

@@ -115,6 +115,8 @@ final class LiveNavWindow {
     }
     private void sync() {
         if(destroyed || activity.isFinishing() || activity.isDestroyed())return;
+        if(nav instanceof FloatingNav
+                && ((FloatingNav)nav).reloadPluginConfigIfChanged())return;
         if(suppressed){hide();return;}
         boolean focused=activity.hasWindowFocus();
         boolean keyboard=keyboardVisible();

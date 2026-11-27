@@ -4,67 +4,59 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
-import android.graphics.RectF;
 import android.view.View;
 
-/**
- * 齿轮图标。
- *
- * <p>为什么不直接写「⚙」：那个字符在 ColorOS 上会掉进 emoji 字体，被渲染成一张彩色小图，
- * 颜色由系统说了不算（深色主题下还会发灰发脏），同一行里和别的线性图标完全不是一个语言。
- * 这里用 Path 画：8 个梯形齿 + 中心孔，尺寸按 24×24 的网格设计，缩到 20dp 依然干净。
- */
+/** Selected settings concept 03: a fine six-tooth outline, tinted by the current theme. */
 final class GearIcon extends View {
-
-    private static final int TEETH = 8;
-
+    private static final Path OUTLINE = outline();
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Path path = new Path();
 
     GearIcon(Context c, int color) {
         super(c);
-        paint.setStyle(Paint.Style.FILL);
         paint.setColor(color);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
     }
-
     void setColor(int value) {
         if (paint.getColor() == value) return;
         paint.setColor(value);
         invalidate();
     }
-
-    @Override
-    protected void onDraw(Canvas canvas) {
-        super.onDraw(canvas);
-        float size = Math.min(getWidth(), getHeight());
-        if (size <= 0) return;
-
-        // 全部尺寸按 24×24 的设计网格算，再按实际边长缩放
-        float unit = size / 24f;
-        float cx = getWidth() / 2f;
-        float cy = getHeight() / 2f;
-        float outer = 10.4f * unit;     // 齿顶圆
-        float root = 7.3f * unit;       // 齿根圆
-        float hole = 3.0f * unit;       // 中心孔
-
-        RectF toothArc = new RectF(cx - outer, cy - outer, cx + outer, cy + outer);
-        RectF gapArc = new RectF(cx - root, cy - root, cx + root, cy + root);
-
-        float step = 360f / TEETH;
-        float half = 11f;               // 单个齿占 ±11°，剩下的是齿间缺口
-
-        path.reset();
-        for (int i = 0; i < TEETH; i++) {
-            float base = i * step;
-            // arcTo 会自动把上一段终点和这一段起点连成直线，正好是齿的侧壁
-            path.arcTo(toothArc, base - half, half * 2f, i == 0);
-            path.arcTo(gapArc, base + half, step - half * 2f, false);
+    /** Shared 24-unit geometry for toolbar, menu and alternate-style settings icons. */
+    static void drawGear(Canvas canvas, Paint paint) {
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1.2f);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        canvas.drawPath(OUTLINE, paint);
+    }
+    private static Path outline() {
+        float[] x=new float[24],y=new float[24];
+        float[] angles={-21f,-14f,14f,21f};
+        for(int tooth=0;tooth<6;tooth++)for(int corner=0;corner<4;corner++){
+            double angle=Math.toRadians(-90f+tooth*60f+angles[corner]);
+            float radius=corner==1||corner==2?9.7f:7.3f;
+            int i=tooth*4+corner;x[i]=12f+(float)Math.cos(angle)*radius;y[i]=12f+(float)Math.sin(angle)*radius;
         }
-        path.close();
-        // 中心孔：同一个 Path 加个圆，EVEN_ODD 自然挖空
-        path.addCircle(cx, cy, hole, Path.Direction.CW);
-        path.setFillType(Path.FillType.EVEN_ODD);
-        canvas.drawPath(path, paint);
+        Path path=new Path();
+        // Round each polygon corner once, rather than constructing paths during drawing.
+        for(int i=0;i<24;i++){
+            int previous=(i+23)%24,next=(i+1)%24;
+            float before=(float)Math.hypot(x[previous]-x[i],y[previous]-y[i]);
+            float after=(float)Math.hypot(x[next]-x[i],y[next]-y[i]);
+            float r=Math.min(.5f,Math.min(before,after)*.3f);
+            float inX=x[i]+(x[previous]-x[i])*r/before,inY=y[i]+(y[previous]-y[i])*r/before;
+            float outX=x[i]+(x[next]-x[i])*r/after,outY=y[i]+(y[next]-y[i])*r/after;
+            if(i==0)path.moveTo(inX,inY);else path.lineTo(inX,inY);
+            path.quadTo(x[i],y[i],outX,outY);
+        }
+        path.close();path.addCircle(12,12,3.8f,Path.Direction.CW);
+        return path;
+    }
+    @Override protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+        float w=getWidth()-getPaddingLeft()-getPaddingRight(),h=getHeight()-getPaddingTop()-getPaddingBottom();
+        float size=Math.min(w,h);if(size<=0)return;
+        canvas.save();canvas.translate(getPaddingLeft()+(w-size)/2f,getPaddingTop()+(h-size)/2f);
+        canvas.scale(size/24f,size/24f);drawGear(canvas,paint);canvas.restore();
     }
 }

@@ -38,10 +38,10 @@ public final class PluginIdentity {
         Signature[] signers;
         if (Build.VERSION.SDK_INT >= 28) {
             SigningInfo signing = info.signingInfo;
-            if (signing == null) return null;
-            signers = signing.hasMultipleSigners()
-                    ? signing.getApkContentsSigners()
-                    : signing.getSigningCertificateHistory();
+            if (signing == null || signing.hasMultipleSigners()) return null;
+            // A rotation history contains several certificates for ONE signer.
+            // Pin the current APK signer, never interpret history as co-signing.
+            signers = signing.getApkContentsSigners();
         } else {
             signers = info.signatures;
         }

@@ -11,6 +11,12 @@ public class AlarmReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context ctx, Intent intent) {
         Log.i(Guard.TAG, "alarm fired");
+        ctx.getSharedPreferences("afs_health",Context.MODE_PRIVATE).edit().putLong("alarm_fired",System.currentTimeMillis()).apply();
+        if (!MasterSwitch.enabled(ctx)) {
+            Guard.cancelSchedules(ctx);
+            NetBlockService.reconcile(ctx);
+            return;
+        }
         Guard.applyAsync(ctx);   // 到点翻转放后台：接收器跑在主线程，apply 里有使用记录查询
         Guard.schedule(ctx);
         Guard.ensureService(ctx);

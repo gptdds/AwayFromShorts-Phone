@@ -12,13 +12,11 @@ import java.util.Locale;
 /**
  * 限额／冻结的「调整时段」：一天里只有这段时间内，每日限额和冻结名单才真正收紧。
  *
- * 断网不在这个时段里：它「默认常开、只在 {@link NetWindow} 的断网调整时段内放开」，
- * 方向正好相反，硬绑在一个时段上必然一边是错的，所以 1.73 起两套时段彻底解耦：
- * 这一个只管限额和冻结，断网读 {@link NetWindow}。两个时段都叫「调整时段」，
- * 但各存各的、各管各的；界面上靠所在页面区分。
+ * 断网默认跟随这个时段，也可在 {@link NetWindow} 中切成自定义。方向仍然相反：
+ * 这个时段内冻结/限额放开收紧操作，而断网只把它当作暂时放开的例外。
  *
  * 语义只有三条，所有判断都必须走 {@link #contains(long, int, int)}：
- * 1. 左闭右开：[22:00, 23:00) 表示 22:00:00 生效、22:59:59 还在、23:00:00 已经放开。
+ * 1. 左闭右开：[11:00, 12:00) 表示 11:00:00 生效、11:59:59 还在、12:00:00 已经放开。
  * 2. start &gt; end 表示跨午夜（22:00–01:00）。
  * 3. start == end 当成全天生效 —— 唯一能表达「整天都管」的写法，不允许当成空。
  */
@@ -27,11 +25,12 @@ public final class TimeWindow {
     static final String SP = "afs_time_window";
     private static final String K_START = "start";
     private static final String K_END = "end";
+    private static final String K_CLEARED = "cleared";
     private static final String K_DEFAULT_22_23 = "default_22_23";
 
-    /** 默认晚上 10 点到 11 点；用户可在设置中自定义。 */
-    public static final int DEFAULT_START = 22 * 60;
-    public static final int DEFAULT_END = 23 * 60;
+    /** 默认 00:00–01:00；用户可在设置中自定义。 */
+    public static final int DEFAULT_START = 0;
+    public static final int DEFAULT_END = 60;
 
     private static final int MINUTES = 24 * 60;
 
@@ -55,35 +54,116 @@ public final class TimeWindow {
 
     public static int start(Context c) {
         if (c == null) return DEFAULT_START;
-        return sane(sp(c).getInt(K_START, DEFAULT_START), DEFAULT_START);
+        return effectiveStart(MasterSwitch.enabled(c), cleared(c),
+                sane(sp(c).getInt(K_START, DEFAULT_START), DEFAULT_START));
     }
 
     public static int end(Context c) {
         if (c == null) return DEFAULT_END;
-        return sane(sp(c).getInt(K_END, DEFAULT_END), DEFAULT_END);
+        return effectiveEnd(MasterSwitch.enabled(c), cleared(c),
+                sane(sp(c).getInt(K_END, DEFAULT_END), DEFAULT_END));
     }
 
     private static int sane(int value, int fallback) {
         return value < 0 || value >= MINUTES ? fallback : value;
     }
 
+    private static boolean cleared(Context c) {
+        return c != null && sp(c).getBoolean(K_CLEARED, false);
+    }
+
+    static int effectiveStart(boolean masterOn, boolean cleared, int stored) {
+        if (!masterOn) return 0;
+        return cleared ? DEFAULT_START : stored;
+    }
+
+    static int effectiveEnd(boolean masterOn, boolean cleared, int stored) {
+        if (!masterOn) return 0;
+        return cleared ? DEFAULT_END : stored;
+    }
+
     public static void save(Context c, int start, int end) {
         if (start < 0 || start >= MINUTES || end < 0 || end >= MINUTES) {
             throw new IllegalArgumentException(T.s("时刻只能是 0:00–23:59"));
         }
-        if (!sp(c).edit().putInt(K_START, start).putInt(K_END, end).commit()) {
+        if (!canEdit(c)) throw new IllegalStateException(T.f("调整时段只能在 %s 内修改", label(c)));
+        if (!sp(c).edit().putInt(K_START, start).putInt(K_END, end)
+                .putBoolean(K_CLEARED, false).commit()) {
             throw new IllegalStateException(T.s("调整时段未能保存"));
         }
+        // 断网跟随主时段时，改这一处也必须立刻翻隧道。
+        NetBlockService.reconcile(c);
+    }
+
+    /** 关闭总开关时真正清空，避免旧时段下次开启后悄悄复活。 */
+    static void clearForMasterOff(Context c) {
+        if (c == null) return;
+        if (!sp(c).edit().putInt(K_START, 0).putInt(K_END, 0)
+                .putBoolean(K_CLEARED, true).commit()) {
+            throw new IllegalStateException(T.s("调整时段未能保存"));
+        }
+        NetBlockService.reconcile(c);
+    }
+
+    /** 清零后重新开启总开关，用默认时段重新建立可编辑窗口；用户已预设则保留。 */
+    static void restoreDefaultForMasterOn(Context c) {
+        if (c == null) return;
+        if (!cleared(c)) {
+            NetBlockService.reconcile(c);
+            return;
+        }
+        if (!sp(c).edit().putInt(K_START, DEFAULT_START).putInt(K_END, DEFAULT_END)
+                .putBoolean(K_CLEARED, false).commit()) {
+            throw new IllegalStateException(T.s("调整时段未能保存"));
+        }
+        NetBlockService.reconcile(c);
     }
 
     public static String label(Context c) {
         return clock(start(c)) + "–" + clock(end(c));
     }
 
+    /** 设置页文案：关闭时仍显示清零状态，并附带已预设的时段。 */
+    public static String summary(Context c) {
+        if (c == null || MasterSwitch.enabled(c)) return label(c);
+        String zero = clock(0) + "–" + clock(0);
+        if (cleared(c)) return zero;
+        int start = presetStart(c);
+        int end = presetEnd(c);
+        if (start == 0 && end == 0) return zero;
+        return zero + T.f(" · 预设 %s–%s", clock(start), clock(end));
+    }
+
+    private static int presetStart(Context c) {
+        if (cleared(c)) return DEFAULT_START;
+        return sane(sp(c).getInt(K_START, DEFAULT_START), DEFAULT_START);
+    }
+
+    private static int presetEnd(Context c) {
+        if (cleared(c)) return DEFAULT_END;
+        return sane(sp(c).getInt(K_END, DEFAULT_END), DEFAULT_END);
+    }
+
     /** 现在在不在时段里。 */
     public static boolean on(Context c) {
         if (c == null) return true;
+        if (!MasterSwitch.enabled(c)) return false;
         return contains(GuardClock.now(c).getTimeInMillis(), start(c), end(c));
+    }
+
+    /**
+     * 调整时段本身能不能改。时段外不允许改时段，否则把时段改成「现在」
+     * 就等于绕过了所有只在调整时段开放的收紧操作。首次安装宽限期内放行，
+     * 否则刚装完如果不在时段里就连时段都设不了，直接死锁。
+     */
+    public static boolean canEdit(Context c) {
+        if (c == null) return false;
+        return editable(MasterSwitch.enabled(c), on(c), Config.inGrace(c));
+    }
+
+    /** 总开关关闭时允许先预设；开启后仍只在调整时段内可改。 */
+    static boolean editable(boolean masterOn, boolean inWindow, boolean grace) {
+        return !masterOn || inWindow || grace;
     }
 
     public static String clock(int minutes) {
@@ -144,14 +224,29 @@ public final class TimeWindow {
         void save(int start, int end) throws RuntimeException;
     }
 
-    /** 调整时段的选择器：改的是限额/冻结闸，与断网无关，所以不用重翻隧道。 */
+    /**
+     * 调整时段的选择器：改的是限额/冻结闸，与断网无关，所以不用重翻隧道。
+     * 非调整时段可以打开选择器查看当前时段，但 {@link #save} 会拒绝写盘 ——
+     * 只进不出：能看不能改，想真正修改得等进入调整时段。
+     */
     public static void pick(final Activity host, final Runnable after) {
-        pickSlots(host, start(host), end(host), new Saver() {
+        boolean masterOn = MasterSwitch.enabled(host);
+        if (masterOn && !canEdit(host)) {
+            android.widget.Toast.makeText(host,T.f("调整时段只能在 %s 内修改",label(host)),android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        pickSlots(host, masterOn ? start(host) : presetStart(host),
+                masterOn ? end(host) : presetEnd(host), new Saver() {
             @Override
             public void save(int start, int end) {
                 TimeWindow.save(host, start, end);
             }
-        }, after);
+        }, () -> {
+            if (after != null) after.run();
+            if (!MasterSwitch.enabled(host)) {
+                toast(host, T.s("调整时段已预设，开启总开关后生效"));
+            }
+        });
     }
 
     /**

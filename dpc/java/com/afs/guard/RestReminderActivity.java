@@ -1,6 +1,8 @@
 package com.afs.guard;
 
 import android.app.Activity;
+import android.app.ActivityManager;
+import android.util.Log;
 import android.app.admin.DevicePolicyManager;
 import android.content.Context;
 import android.content.Intent;
@@ -13,7 +15,7 @@ import android.graphics.BitmapFactory;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
 
-/** A dismissible reminder in its own task; never changes locking or learning state. */
+/** Reminder in its own task; device-owner installs prevent app switching until dismissal. */
 public final class RestReminderActivity extends Activity {
     private static WeakReference<RestReminderActivity> current = new WeakReference<>(null);
     private ImageView artwork;
@@ -23,6 +25,80 @@ public final class RestReminderActivity extends Activity {
     private final Runnable autoClose = () -> { if (!isFinishing()) RestAlert.clear(this); };
     /** 这一次弹出来的时刻：15 秒内一律不给关（返回键、点外面都不理）。 */
     private long openedAt;
+    private boolean ownsLockTask;
+    private boolean closing;
+    private long unlockDeadline;
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (!isFinishing() && !closing) enterReminderLock();
+    }
+
+    private void enterReminderLock() {
+        if (ownsLockTask) return;
+        DevicePolicyManager policy = (DevicePolicyManager)getSystemService(Context.DEVICE_POLICY_SERVICE);
+        ActivityManager activities = (ActivityManager)getSystemService(Context.ACTIVITY_SERVICE);
+        if (policy == null || activities == null || !policy.isDeviceOwnerApp(getPackageName())) return;
+        // Another page (for example the focus timer) owns an existing lock. Leave it intact.
+        if (activities.getLockTaskModeState() != ActivityManager.LOCK_TASK_MODE_NONE) return;
+        try {
+            if (!policy.isLockTaskPermitted(getPackageName())) {
+                java.util.Set<String> packages = new java.util.LinkedHashSet<>(
+                        java.util.Arrays.asList(policy.getLockTaskPackages(Guard.admin(this))));
+                packages.add(getPackageName());
+                policy.setLockTaskPackages(Guard.admin(this), packages.toArray(new String[0]));
+            }
+            // Only DO-whitelisted apps enter here: never show the escapable screen-pinning prompt.
+            startLockTask();
+            // The system applies the mode asynchronously. Track our accepted request so
+            // dismissal still stops it even before ActivityManager reports LOCKED.
+            ownsLockTask = true;
+        } catch (RuntimeException error) {
+            Log.w(Guard.TAG, "rest reminder lock failed", error);
+        }
+    }
+
+    private void leaveReminderLock() {
+        if (ownsLockTask) {
+            try {
+                stopLockTask();
+                ownsLockTask = false;
+            } catch (RuntimeException error) {
+                // Keep ownership so a later dismissal can retry our own request.
+                Log.w(Guard.TAG, "rest reminder unlock failed", error);
+            }
+        }
+    }
+
+    @Override public void finish() {
+        if (closing) return;
+        closing = true;
+        boolean releasing = ownsLockTask;
+        leaveReminderLock();
+        // Unlock is processed asynchronously by the system. Finishing the root task in
+        // the same turn can be rejected while that task is still marked as locked.
+        if (releasing) {
+            unlockDeadline = android.os.SystemClock.uptimeMillis() + 2000L;
+            timer.post(this::finishAfterUnlock);
+        } else super.finish();
+    }
+
+    private void finishAfterUnlock() {
+        ActivityManager activities = (ActivityManager)getSystemService(Context.ACTIVITY_SERVICE);
+        if (isDestroyed() || isFinishing()) return;
+        // Global mode may belong to a different task by now. Never wait indefinitely
+        // for NONE and never stop someone else's lock to make our page finish.
+        if (activities != null && activities.getLockTaskModeState() != ActivityManager.LOCK_TASK_MODE_NONE
+                && android.os.SystemClock.uptimeMillis() < unlockDeadline) {
+            timer.postDelayed(this::finishAfterUnlock, 50L);
+            return;
+        }
+        super.finish();
+        if (!isFinishing()) {
+            Log.w(Guard.TAG, "rest reminder finish rejected after unlock wait");
+            closing = false; // Permit a subsequent explicit dismissal to retry.
+        }
+    }
 
     static Intent intent(Context c, int minutes) {
         return new Intent(c, RestReminderActivity.class).putExtra("minutes", minutes)
@@ -41,6 +117,17 @@ public final class RestReminderActivity extends Activity {
             // whose window manager can crash when removing a reused reminder task.
             if (activity != null && !activity.isFinishing()) activity.finish();
         });
+    }
+
+    /**
+     * 提醒页面此刻在不在屏幕上。
+     *
+     * 进程刚被拉起来时这里必然是 false —— 页面随旧进程一起没了，
+     * 正是 {@link RestAlert#tick} 判断「要不要补弹」的信号。
+     */
+    static boolean showing() {
+        RestReminderActivity activity = current.get();
+        return activity != null && !activity.isFinishing();
     }
 
     @Override protected void attachBaseContext(Context base) {
@@ -123,7 +210,8 @@ public final class RestReminderActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
-        timer.removeCallbacks(autoClose);
+        leaveReminderLock();
+        timer.removeCallbacksAndMessages(null);
         if (artwork != null) artwork.setImageDrawable(null);
         if(current.get()==this) current.clear();
         super.onDestroy();

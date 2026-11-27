@@ -12,27 +12,22 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
  * 跨设备共享额度：手机这一侧的客户端。
  *
- * 模型：一个池子、一份分钟数、两台设备。电脑是权威 —— 它每秒知道自己用了多久，
- * 也是唯一能杀进程的一端；手机每次轮询把自己的用量报上去，同时拿回「电脑已用 + 合计」。
- * 判定一律看合计，不看自己那一段。
+ * 现在一个手机可以同时绑定多个电脑池：「视频」本地额度组绑定电脑的视频池，
+ * 「游戏」本地额度组绑定电脑的游戏池。每个绑定各报各的用量，各看各的剩余，
+ * 一个池用尽不会连带另一个池。
  *
- * 为什么走局域网而不是继续用 Gist：Gist 那条链路手机端 60 秒才同步一次、
- * 加上 raw 的 CDN 缓存，最坏十几分钟不对齐 —— 共享额度里这就等于白送。
- * 同一 WiFi 下直连 PC，一次往返 20ms 左右，3 秒一轮就是真实时。
+ * 电脑仍然是权威：它每秒知道自己用了多久，也是唯一能杀进程的一端；
+ * 手机每次轮询把自己各个组的用量报上去，同时拿回每个池的「电脑已用 + 合计」。
  *
  * 断网时不能瞎判：
- *   · 缓存 30 秒内 → 用合计判超（正常路径）
+ *   · 缓存 30 秒内 → 用该池的合计判超
  *   · 缓存过期     → 交回本地判定，宁可少冻也不把用户永久锁在外面
- * 也就是说「连不上」的后果是退回各自记账，不是整组放行也不是整组冻结。
  */
 final class LanQuota {
 
@@ -47,9 +42,7 @@ final class LanQuota {
     static final long STALE_MS = 30_000L;
     /**
      * Gist 兜底数据的老化窗口。
-     *
-     * PC 每 15 分钟推一次，所以 90 分钟等于「连着 6 次没推上来」才当作无效；
-     * 再长就会出现「电脑那边已经加了额度、手机还死按旧数字锁着」的坑。
+     * PC 每 15 分钟推一次，所以 90 分钟等于「连着 6 次没推上来」才当作无效。
      */
     static final long GIST_STALE_MS = 90 * 60_000L;
     /** Gist 拉取间隔：比局域网宽松得多，raw 本身就有 CDN 缓存。 */
@@ -73,13 +66,186 @@ final class LanQuota {
         return c.getApplicationContext().getSharedPreferences(SP, Context.MODE_PRIVATE);
     }
 
-    /* ---------------- 配置 ---------------- */
+    private static void put(JSONObject o, String key, Object value) {
+        try {
+            o.put(key, value);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static JSONObject binding(String group, String groupName, String pool, String poolName) {
+        JSONObject out = new JSONObject();
+        put(out, "group", group == null ? "" : group);
+        put(out, "groupName", groupName == null ? "" : groupName);
+        put(out, "pool", pool == null ? "" : pool);
+        put(out, "poolName", poolName == null ? "" : poolName);
+        return out;
+    }
+
+    /* ---------------- 绑定 ---------------- */
+
+    /**
+     * 本机额度组 → 电脑共享池。
+     *
+     * 旧版只存一个 group/groupName；第一次读到没有 bindings 的旧配置时把它转成
+     * 一条 pool 为空的绑定。电脑第一次回包后会自动补上池 id，旧数据不会丢。
+     */
+    static JSONArray bindings(Context c) {
+        SharedPreferences p = sp(c);
+        String raw = p.getString("bindings", "");
+        if (!raw.isEmpty()) {
+            try {
+                JSONArray parsed = new JSONArray(raw);
+                if (parsed.length() > 0) {
+                    return parsed;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        JSONArray out = new JSONArray();
+        String legacyGroup = p.getString("group", "");
+        if (!legacyGroup.isEmpty()) {
+            out.put(binding(legacyGroup, p.getString("groupName", ""), "", ""));
+        }
+        return out;
+    }
+
+    private static void writeBindings(Context c, JSONArray list) {
+        String firstGroup = "";
+        String firstName = "";
+        if (list.length() > 0) {
+            JSONObject first = list.optJSONObject(0);
+            if (first != null) {
+                firstGroup = first.optString("group", "");
+                firstName = first.optString("groupName", "");
+            }
+        }
+        sp(c).edit()
+                .putString("bindings", list.toString())
+                // 旧字段只镜像第一条，供旧页面 / 旧逻辑读取。
+                .putString("group", firstGroup)
+                .putString("groupName", firstName)
+                .apply();
+    }
+
+    static JSONObject bindingForGroup(Context c, String groupId) {
+        if (groupId == null || groupId.isEmpty()) {
+            return null;
+        }
+        JSONArray list = bindings(c);
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject item = list.optJSONObject(i);
+            if (item != null && groupId.equals(item.optString("group", ""))) {
+                return item;
+            }
+        }
+        return null;
+    }
+
+    static String poolForGroup(Context c, String groupId) {
+        JSONObject item = bindingForGroup(c, groupId);
+        return item == null ? "" : item.optString("pool", "");
+    }
+
+    /** 电脑给这个池定的名字（跨设备格子 1、2…）；还没同步到时返回空串。 */
+    static String poolNameForGroup(Context c, String groupId) {
+        JSONObject item = bindingForGroup(c, groupId);
+        return item == null ? "" : item.optString("poolName", "").trim();
+    }
+
+    static String groupForPool(Context c, String poolId) {
+        if (poolId == null || poolId.isEmpty()) {
+            return "";
+        }
+        JSONArray list = bindings(c);
+        for (int i = 0; i < list.length(); i++) {
+            JSONObject item = list.optJSONObject(i);
+            if (item != null && poolId.equals(item.optString("pool", ""))) {
+                return item.optString("group", "");
+            }
+        }
+        return "";
+    }
+
+    /**
+     * 一组本地额度只能接一个电脑池；一个电脑池也只接一组本地额度。
+     * 再次保存同一组就是换池；同一个池原来绑在别的组上时，旧绑定会被替换。
+     */
+    static void setBinding(Context c, String groupId, String groupName, String poolId, String poolName) {
+        if (groupId == null || groupId.isEmpty()) {
+            return;
+        }
+        String pool = poolId == null ? "" : poolId;
+        JSONArray next = new JSONArray();
+        JSONArray old = bindings(c);
+        for (int i = 0; i < old.length(); i++) {
+            JSONObject item = old.optJSONObject(i);
+            if (item == null) {
+                continue;
+            }
+            if (groupId.equals(item.optString("group", ""))) {
+                continue;
+            }
+            if (!pool.isEmpty() && pool.equals(item.optString("pool", ""))) {
+                continue;
+            }
+            next.put(item);
+        }
+        next.put(binding(groupId, groupName, pool, poolName));
+        writeBindings(c, next);
+    }
+
+    static void removeBinding(Context c, String groupId) {
+        if (groupId == null || groupId.isEmpty()) {
+            return;
+        }
+        JSONArray next = new JSONArray();
+        JSONArray old = bindings(c);
+        for (int i = 0; i < old.length(); i++) {
+            JSONObject item = old.optJSONObject(i);
+            if (item == null || groupId.equals(item.optString("group", ""))) {
+                continue;
+            }
+            next.put(item);
+        }
+        writeBindings(c, next);
+    }
+
+    /** 兼容旧入口：没有绑定时先挂一条等待电脑回包补池 id 的绑定。 */
+    static void setGroup(Context c, String groupId, String name) {
+        if (groupId == null || groupId.isEmpty()) {
+            return;
+        }
+        JSONObject existing = bindingForGroup(c, groupId);
+        if (existing != null) {
+            setBinding(c, groupId, name, existing.optString("pool", ""), existing.optString("poolName", ""));
+        } else {
+            setBinding(c, groupId, name, "", "");
+        }
+    }
+
+    static String group(Context c) {
+        JSONObject first = firstBinding(c);
+        return first == null ? "" : first.optString("group", "");
+    }
+
+    static String groupName(Context c) {
+        JSONObject first = firstBinding(c);
+        return first == null ? "" : first.optString("groupName", "");
+    }
+
+    private static JSONObject firstBinding(Context c) {
+        JSONArray list = bindings(c);
+        return list.length() > 0 ? list.optJSONObject(0) : null;
+    }
+
+    /* ---------------- 连接配置 ---------------- */
 
     static boolean active(Context c) {
         if (!sp(c).getBoolean("enabled", false)) return false;
         return !sp(c).getString("host", "").isEmpty()
                 && !sp(c).getString("token", "").isEmpty()
-                && !sp(c).getString("group", "").isEmpty();
+                && bindings(c).length() > 0;
     }
 
     static boolean enabled(Context c) {
@@ -98,14 +264,9 @@ final class LanQuota {
         return sp(c).getString("token", "");
     }
 
-    static String group(Context c) {
-        return sp(c).getString("group", "");
-    }
-
-    /** 这个额度组是不是那个跨设备共享的组。 */
+    /** 这个额度组是不是已经绑定了某个电脑池。 */
     static boolean isShared(Context c, String groupId) {
-        if (groupId == null || groupId.isEmpty()) return false;
-        return active(c) && groupId.equals(sp(c).getString("group", ""));
+        return active(c) && bindingForGroup(c, groupId) != null;
     }
 
     static void setEnabled(Context c, boolean on) {
@@ -117,29 +278,9 @@ final class LanQuota {
         sp(c).edit().putString("token", token == null ? "" : token.trim()).apply();
     }
 
-    static void setGroup(Context c, String groupId) {
-        sp(c).edit().putString("group", groupId == null ? "" : groupId).apply();
-    }
-
-    /** 绑定组时把名字一起存下来：列表页不必为了显示一个标题去读使用记录快照。 */
-    static void setGroup(Context c, String groupId, String name) {
-        sp(c).edit()
-                .putString("group", groupId == null ? "" : groupId)
-                .putString("groupName", name == null ? "" : name)
-                .apply();
-    }
-
-    static String groupName(Context c) {
-        return sp(c).getString("groupName", "");
-    }
-
     /**
-     * 保存服务器地址。允许直接粘 `192.168.1.5` / `192.168.1.5:8738` / `http://...`，
-     * 少一个"格式不对"的来回。
-     *
+     * 保存服务器地址。允许直接粘 `192.168.1.5` / `192.168.1.5:8738` / `http://...`。
      * 只接受私有网段：明文 HTTP 已经为它放开了，不能让一个公网域名借这条路走明文。
-     *
-     * @return 地址合法且已保存
      */
     static boolean setServer(Context c, String raw, String token) {
         String text = raw == null ? "" : raw.trim();
@@ -190,36 +331,118 @@ final class LanQuota {
         return false;
     }
 
-    /* ---------------- 缓存视图 ---------------- */
+    /* ---------------- 每池缓存 ---------------- */
+
+    private static JSONObject poolStates(Context c) {
+        SharedPreferences p = sp(c);
+        String raw = p.getString("poolStates", "");
+        if (!raw.isEmpty()) {
+            try {
+                return new JSONObject(raw);
+            } catch (Exception ignored) {
+            }
+        }
+        // 旧版把唯一一个池摊在顶层字段里。把它们搬进 "" 这个占位池，
+        // 等电脑回包补上真实 id 后再改名。
+        JSONObject legacy = new JSONObject();
+        if (p.contains("at")) {
+            put(legacy, "minutes", p.getInt("minutes", 0));
+            put(legacy, "pcUsed", p.getLong("pcUsed", 0L));
+            put(legacy, "phoneUsed", p.getLong("phoneUsed", 0L));
+            put(legacy, "total", p.getLong("total", 0L));
+            put(legacy, "exhausted", p.getBoolean("exhausted", false));
+            put(legacy, "at", p.getLong("at", 0L));
+            put(legacy, "source", p.getString("source", "lan"));
+            put(legacy, "pcAppsJson", p.getString("pcAppsJson", "[]"));
+        }
+        JSONObject out = new JSONObject();
+        if (legacy.length() > 0) {
+            put(out, "", legacy);
+        }
+        return out;
+    }
+
+    private static void writePoolStates(Context c, JSONObject states) {
+        sp(c).edit().putString("poolStates", states.toString()).apply();
+    }
+
+    private static JSONObject stateForGroup(Context c, String groupId) {
+        JSONObject item = bindingForGroup(c, groupId);
+        String pool = item == null ? "" : item.optString("pool", "");
+        JSONObject states = poolStates(c);
+        JSONObject state = states.optJSONObject(pool);
+        return state == null ? new JSONObject() : state;
+    }
+
+    static int minutes(Context c, String groupId) {
+        return stateForGroup(c, groupId).optInt("minutes", 0);
+    }
+
+    static long pcUsed(Context c, String groupId) {
+        return stateForGroup(c, groupId).optLong("pcUsed", 0L);
+    }
+
+    static long phoneUsed(Context c, String groupId) {
+        return stateForGroup(c, groupId).optLong("phoneUsed", 0L);
+    }
+
+    static long total(Context c, String groupId) {
+        return stateForGroup(c, groupId).optLong("total", 0L);
+    }
+
+    static long at(Context c, String groupId) {
+        return stateForGroup(c, groupId).optLong("at", 0L);
+    }
+
+    static JSONArray pcApps(Context c, String groupId) {
+        return parseArray(stateForGroup(c, groupId).optString("pcAppsJson", ""));
+    }
+
+    static String source(Context c, String groupId) {
+        return stateForGroup(c, groupId).optString("source", "lan");
+    }
+
+    static boolean fresh(Context c, String groupId) {
+        long stamp = at(c, groupId);
+        if (stamp <= 0) return false;
+        long age = System.currentTimeMillis() - stamp;
+        return age <= ("gist".equals(source(c, groupId)) ? GIST_STALE_MS : STALE_MS);
+    }
+
+    static boolean exhausted(Context c, String groupId) {
+        return fresh(c, groupId) && stateForGroup(c, groupId).optBoolean("exhausted", false);
+    }
 
     static int minutes(Context c) {
-        return sp(c).getInt("minutes", 0);
+        return minutes(c, group(c));
     }
 
     static long pcUsed(Context c) {
-        return sp(c).getLong("pcUsed", 0L);
+        return pcUsed(c, group(c));
     }
 
     static long phoneUsed(Context c) {
-        return sp(c).getLong("phoneUsed", 0L);
+        return phoneUsed(c, group(c));
     }
 
     static long total(Context c) {
-        return sp(c).getLong("total", 0L);
+        return total(c, group(c));
     }
 
-    static long at(Context c) {
-        return sp(c).getLong("at", 0L);
-    }
-
-    /**
-     * 电脑那一份花在哪些进程上（[{"name":"无畏契约","seconds":2902.9}]）。
-     *
-     * 只缓存电脑那边的明细：手机自己这一份随时能从账本里算出来，而且更准；
-     * 电脑的是它在局域网另一头算的，拿不到就没了。
-     */
     static JSONArray pcApps(Context c) {
-        return parseArray(sp(c).getString("pcAppsJson", ""));
+        return pcApps(c, group(c));
+    }
+
+    static String source(Context c) {
+        return source(c, group(c));
+    }
+
+    static boolean fresh(Context c) {
+        return fresh(c, group(c));
+    }
+
+    static boolean exhausted(Context c) {
+        return exhausted(c, group(c));
     }
 
     private static JSONArray parseArray(String raw) {
@@ -235,16 +458,15 @@ final class LanQuota {
 
     /**
      * 本机组内每个应用的用量（秒），用于随上报一起发给电脑，也用于手机自己展示。
-     *
-     * 名称用应用标题而不是包名：对面是给人看的列表，com.xx.yy 那种串没意义。
+     * 名称用应用标题而不是包名：对面是给人看的列表。
      */
-    static JSONArray appDetail(Context c, DailyQuotaData data, org.json.JSONObject group) {
+    static JSONArray appDetail(Context c, DailyQuotaData data, JSONObject group) {
         JSONArray out = new JSONArray();
         if (data == null || group == null) {
             return out;
         }
         JSONArray apps = group.optJSONArray("apps");
-        org.json.JSONObject targets = data.usage.optJSONObject("targets");
+        JSONObject targets = data.usage.optJSONObject("targets");
         if (apps == null || targets == null) {
             return out;
         }
@@ -254,36 +476,12 @@ final class LanQuota {
             if (ms <= 0) {
                 continue;
             }
-            try {
-                out.put(new JSONObject()
-                        .put("name", Guard.labelOf(c.getPackageManager(), pkg))
-                        .put("seconds", Math.round(ms / 100.0) / 10.0));
-            } catch (Exception ignored) {
-            }
+            JSONObject item = new JSONObject();
+            put(item, "name", Guard.labelOf(c.getPackageManager(), pkg));
+            put(item, "seconds", Math.round(ms / 100.0) / 10.0);
+            out.put(item);
         }
         return out;
-    }
-
-    static boolean fresh(Context c) {
-        long stamp = at(c);
-        if (stamp <= 0) return false;
-        long age = System.currentTimeMillis() - stamp;
-        return age <= ("gist".equals(source(c)) ? GIST_STALE_MS : STALE_MS);
-    }
-
-    /** 这份数据从哪来：lan（局域网，准）/ gist（兜底，分钟级延迟）。 */
-    static String source(Context c) {
-        return sp(c).getString("source", "lan");
-    }
-
-    /**
-     * 共享池是否已耗尽。
-     *
-     * 只有缓存新鲜时才敢说"是"。缓存过期返回 false，让调用方回落到本地判定 ——
-     * 用一份十分钟前的旧数据把人锁在门外，比漏判一次糟糕得多。
-     */
-    static boolean exhausted(Context c) {
-        return fresh(c) && sp(c).getBoolean("exhausted", false);
     }
 
     /** 最近一次轮询失败的原因；成功后清空。设置页拿它诊断「配了但不同步」。 */
@@ -292,23 +490,21 @@ final class LanQuota {
     }
 
     static void clearCache(Context c) {
-        sp(c).edit().remove("minutes").remove("pcUsed").remove("phoneUsed")
-                .remove("total").remove("exhausted").remove("at").remove("lastError")
+        sp(c).edit().remove("poolStates")
+                .remove("minutes").remove("pcUsed").remove("phoneUsed")
+                .remove("total").remove("exhausted").remove("at")
                 .remove("source").remove("pcAppsJson").apply();
     }
 
     /* ---------------- 轮询 ---------------- */
 
     /**
-     * 上报手机这一段的用量并取回合计。节流在调用侧做，这里只保证"同一时刻一个在飞"。
+     * 一次上报所有绑定。
      *
-     * @param phoneUsedMs 绑定组今天的已用毫秒（来自 DailyQuotaStore 的快照）
-     * @param apps        组内每个应用的用量明细，电脑面板要照着它列出「手机这一份」；
-     *                    可以为 null（老调用点 / 懒得算的时候）
-     * @param onResult    UI 线程回调；可以为 null
+     * reports 里每一项：{id: 电脑池 id, group: 本地额度组 id, usedSeconds, apps}。
      */
-    static void pollAsync(final Context c, final long phoneUsedMs, final JSONArray apps, final Runnable onResult) {
-        if (!active(c)) return;
+    static void pollAsync(final Context c, final JSONArray reports, final Runnable onResult) {
+        if (!active(c) || reports == null || reports.length() == 0) return;
         synchronized (LOCK) {
             long now = System.currentTimeMillis();
             if (now - lastStart < MIN_GAP_MS) return;
@@ -317,17 +513,13 @@ final class LanQuota {
         final Context app = c.getApplicationContext();
         EXEC.execute(() -> {
             try {
-                poll(app, phoneUsedMs, apps);
+                poll(app, reports);
                 sp(app).edit().remove("lastError").apply();
             } catch (Throwable error) {
                 Log.w(TAG, "lan quota poll failed: " + error);
-                // 后台线程的异常没人看得到，落一份给设置页显示 —— 否则
-                //「配置全对但就是不同步」会变成一个查不出原因的悬案。
                 String detail = error.getMessage() == null ? error.toString() : error.getMessage();
                 sp(app).edit().putString("lastError", detail).apply();
-                // 主通道断了 → Gist 兜底。在家外也能看到电脑那边用了多少，
-                // 虽然只能分钟级，总比两边各记各的强。
-                try { pullGist(app, phoneUsedMs); } catch (Throwable ignored) { }
+                try { pullGist(app); } catch (Throwable ignored) { }
             } finally {
                 if (onResult != null) {
                     try { onResult.run(); } catch (Throwable ignored) { }
@@ -336,18 +528,44 @@ final class LanQuota {
         });
     }
 
-    private static void poll(Context c, long phoneUsedMs, JSONArray apps) throws Exception {
+    /**
+     * 兼容旧调用：只报第一条绑定。新代码请用带 reports 的重载。
+     */
+    static void pollAsync(final Context c, final long phoneUsedMs, final JSONArray apps, final Runnable onResult) {
+        JSONObject item = firstBinding(c);
+        if (item == null) {
+            return;
+        }
+        JSONObject report = new JSONObject();
+        put(report, "id", item.optString("pool", ""));
+        put(report, "group", item.optString("group", ""));
+        put(report, "usedSeconds", Math.max(0L, phoneUsedMs) / 1000.0);
+        if (apps != null && apps.length() > 0) {
+            put(report, "apps", apps);
+        }
+        JSONArray reports = new JSONArray();
+        reports.put(report);
+        pollAsync(c, reports, onResult);
+    }
+
+    private static void poll(Context c, JSONArray reports) throws Exception {
         SharedPreferences p = sp(c);
         String host = p.getString("host", "");
         int port = p.getInt("port", 8738);
         String token = p.getString("token", "");
-        String group = p.getString("group", "");
         if (host.isEmpty() || token.isEmpty()) return;
         JSONObject body = new JSONObject();
-        body.put("usedSeconds", Math.max(0L, phoneUsedMs) / 1000.0);
-        body.put("group", group);
-        if (apps != null && apps.length() > 0) {
-            body.put("apps", apps);
+        put(body, "pools", reports);
+        // 同时带一份顶层旧字段：万一是旧电脑端，至少第一条绑定还能工作。
+        if (reports.length() > 0) {
+            JSONObject first = reports.optJSONObject(0);
+            if (first != null) {
+                put(body, "usedSeconds", first.optDouble("usedSeconds", 0));
+                put(body, "group", first.optString("group", ""));
+                if (first.has("apps")) {
+                    put(body, "apps", first.optJSONArray("apps"));
+                }
+            }
         }
         JSONObject o = call(host, port, token, body);
         apply(c, o);
@@ -391,43 +609,120 @@ final class LanQuota {
         }
     }
 
+    private static JSONObject stateFromPool(JSONObject pool, long now, String source) {
+        JSONObject state = new JSONObject();
+        put(state, "minutes", pool.optInt("poolMinutes", 0));
+        put(state, "pcUsed", (long) (pool.optDouble("pcUsed", 0) * 1000));
+        put(state, "phoneUsed", (long) (pool.optDouble("phoneUsed", 0) * 1000));
+        put(state, "total", (long) (pool.optDouble("total", 0) * 1000));
+        put(state, "exhausted", pool.optBoolean("exhausted", false));
+        put(state, "at", now);
+        put(state, "source", source);
+        JSONArray pcApps = pool.optJSONArray("pcApps");
+        put(state, "pcAppsJson", pcApps == null ? "[]" : pcApps.toString());
+        return state;
+    }
+
     private static void apply(Context c, JSONObject o) {
-        int minutes = o.optInt("poolMinutes", 0);
-        long pcUsed = (long) (o.optDouble("pcUsed", 0) * 1000);
-        long phoneUsed = (long) (o.optDouble("phoneUsed", 0) * 1000);
-        long total = (long) (o.optDouble("total", 0) * 1000);
+        long now = System.currentTimeMillis();
+        JSONObject states = poolStates(c);
+        JSONArray list = bindings(c);
+        JSONArray pools = o.optJSONArray("pools");
+        if (pools != null && pools.length() > 0) {
+            boolean bindingsChanged = false;
+            for (int i = 0; i < pools.length(); i++) {
+                JSONObject pool = pools.optJSONObject(i);
+                if (pool == null) {
+                    continue;
+                }
+                String poolId = pool.optString("id", "");
+                if (poolId.isEmpty()) {
+                    continue;
+                }
+                JSONObject target = null;
+                for (int j = 0; j < list.length(); j++) {
+                    JSONObject candidate = list.optJSONObject(j);
+                    if (candidate != null && poolId.equals(candidate.optString("pool", ""))) {
+                        target = candidate;
+                        break;
+                    }
+                }
+                if (target == null) {
+                    // 旧绑定没有池 id：电脑第一次回包时把它认领到第一个返回的池。
+                    for (int j = 0; j < list.length(); j++) {
+                        JSONObject candidate = list.optJSONObject(j);
+                        if (candidate != null && candidate.optString("pool", "").isEmpty()) {
+                            target = candidate;
+                            put(target, "pool", poolId);
+                            JSONObject legacy = states.optJSONObject("");
+                            if (legacy != null && !states.has(poolId)) {
+                                put(states, poolId, legacy);
+                            }
+                            if (legacy != null) {
+                                states.remove("");
+                            }
+                            bindingsChanged = true;
+                            break;
+                        }
+                    }
+                }
+                if (target == null) {
+                    continue;
+                }
+                String poolName = pool.optString("name", "").trim();
+                if (!poolName.isEmpty() && !poolName.equals(target.optString("poolName", ""))) {
+                    put(target, "poolName", poolName);
+                    bindingsChanged = true;
+                }
+                put(states, poolId, stateFromPool(pool, now, "lan"));
+                int minutes = pool.optInt("poolMinutes", 0);
+                if (minutes > 0) {
+                    DailyQuotaStore.syncSharedMinutes(c, target.optString("group", ""), minutes);
+                }
+            }
+            if (bindingsChanged) {
+                writeBindings(c, list);
+            }
+            writePoolStates(c, states);
+            return;
+        }
+        // 旧版电脑端：只有顶层一个池。把它记到第一条绑定上，别影响其他组。
+        JSONObject first = list.length() > 0 ? list.optJSONObject(0) : null;
+        if (first == null) {
+            writePoolStates(c, states);
+            return;
+        }
+        String poolId = first.optString("pool", "");
+        JSONObject legacy = new JSONObject();
+        put(legacy, "minutes", o.optInt("poolMinutes", 0));
+        put(legacy, "pcUsed", (long) (o.optDouble("pcUsed", 0) * 1000));
+        put(legacy, "phoneUsed", (long) (o.optDouble("phoneUsed", 0) * 1000));
+        put(legacy, "total", (long) (o.optDouble("total", 0) * 1000));
+        put(legacy, "exhausted", o.optBoolean("exhausted", false));
+        put(legacy, "at", now);
+        put(legacy, "source", "lan");
         JSONArray pcApps = o.optJSONArray("pcApps");
-        sp(c).edit()
-                .putInt("minutes", minutes)
-                .putLong("pcUsed", pcUsed)
-                .putLong("phoneUsed", phoneUsed)
-                .putLong("total", total)
-                .putBoolean("exhausted", o.optBoolean("exhausted", false))
-                .putLong("at", System.currentTimeMillis())
-                .putString("source", "lan")
-                // 电脑那一份的进程明细：额度页要照着它列出「电脑这一份」
-                .putString("pcAppsJson", pcApps == null ? "[]" : pcApps.toString())
-                .apply();
-        // 预算以电脑为准：手机本地那份 minutes 只是显示用的副本，跟着池子一起改，
-        // 否则电脑把额度调到 90 之后这边还顶着旧数字，进度条和文案全对不上。
+        put(legacy, "pcAppsJson", pcApps == null ? "[]" : pcApps.toString());
+        put(states, poolId, legacy);
+        writePoolStates(c, states);
+        int minutes = o.optInt("poolMinutes", 0);
         if (minutes > 0) {
-            DailyQuotaStore.syncSharedMinutes(c, group(c), minutes);
+            DailyQuotaStore.syncSharedMinutes(c, first.optString("group", ""), minutes);
         }
     }
 
     /**
      * 兜底：从同步 Gist 拉 PC 推上来的 quota-pool.json。
-     *
-     * 这里只用它当「电脑那一半」的估计值，手机自己的用量照旧本地算，
-     * 不把 Gist 上的 phoneUsed 拿回来用 —— 那是上一次连通时上报的旧值，
-     * 比当前真实值小，用它会多给用户几分钟。
+     * Gist 只有旧版单池格式，所以只补给第一条绑定；其他池仍按局域网数据。
      */
-    private static void pullGist(Context c, long phoneUsedMs) {
+    private static void pullGist(Context c) {
         long now = System.currentTimeMillis();
         synchronized (LOCK) {
             if (now - lastGistTry < GIST_RETRY_MS) return;
             lastGistTry = now;
         }
+        JSONObject first = firstBinding(c);
+        if (first == null) return;
         SyncTarget target = SyncConfig.target(c);
         if (target == null) return;
         String raw;
@@ -444,30 +739,32 @@ final class LanQuota {
         } catch (Exception error) {
             return;
         }
-        // 隔天的账不能往今天扣：Gist 上躺着的可能是昨晚推的。
-        // 「今天」按额度日算（早上 8 点翻页），与电脑端 quota-pool.json 的 date 同一口径。
         if (!DayBoundary.key(c, System.currentTimeMillis()).equals(o.optString("date", ""))) return;
         int minutes = o.optInt("minutes", 0);
         if (minutes <= 0) return;
         long pcUsed = (long) (o.optDouble("pcUsed", 0) * 1000);
-        long phoneUsed = Math.max(0L, phoneUsedMs);
-        long total = pcUsed + phoneUsed;
-        JSONArray pcApps = o.optJSONArray("pcApps");
-        sp(c).edit()
-                .putInt("minutes", minutes)
-                .putLong("pcUsed", pcUsed)
-                .putLong("phoneUsed", phoneUsed)
-                .putLong("total", total)
-                .putBoolean("exhausted", total >= minutes * 60_000L)
-                .putLong("at", System.currentTimeMillis())
-                .putString("source", "gist")
-                .putString("pcAppsJson", pcApps == null ? "[]" : pcApps.toString())
-                .apply();
-        // 预算以电脑为准：手机本地那份 minutes 只是显示用的副本，跟着池子一起改，
-        // 否则电脑把额度调到 90 之后这边还顶着旧数字，进度条和文案全对不上。
-        if (minutes > 0) {
-            DailyQuotaStore.syncSharedMinutes(c, group(c), minutes);
+        // Gist 上的 phoneUsed 是上一次上报的旧值，不能拿来用；用当前本机账本。
+        long phoneUsed = 0L;
+        DailyQuotaData data = DailyQuotaStore.snapshot(c);
+        JSONObject group = data.groupById(first.optString("group", ""));
+        if (group != null) {
+            phoneUsed = data.used(group);
         }
+        long total = pcUsed + phoneUsed;
+        JSONObject state = new JSONObject();
+        put(state, "minutes", minutes);
+        put(state, "pcUsed", pcUsed);
+        put(state, "phoneUsed", phoneUsed);
+        put(state, "total", total);
+        put(state, "exhausted", total >= minutes * 60_000L);
+        put(state, "at", System.currentTimeMillis());
+        put(state, "source", "gist");
+        JSONArray pcApps = o.optJSONArray("pcApps");
+        put(state, "pcAppsJson", pcApps == null ? "[]" : pcApps.toString());
+        JSONObject states = poolStates(c);
+        put(states, first.optString("pool", ""), state);
+        writePoolStates(c, states);
+        DailyQuotaStore.syncSharedMinutes(c, first.optString("group", ""), minutes);
     }
 
     private static String read(InputStream in) throws Exception {
@@ -479,12 +776,16 @@ final class LanQuota {
     }
 
     /** 给额度页显示用：「与电脑共享 · 剩 12 分钟」；Gist 兜底时标「离线估算」。 */
-    static String summary(Context c) {
-        if (!active(c)) return "";
-        if (!fresh(c)) return T.s("未连接电脑");
-        int minutes = minutes(c);
-        long remainSec = Math.max(0L, minutes * 60L - total(c) / 1000L);
-        if ("gist".equals(source(c))) return T.f("离线估算 · 剩 %d 分钟", remainSec / 60);
+    static String summary(Context c, String groupId) {
+        if (!isShared(c, groupId)) return "";
+        if (!fresh(c, groupId)) return T.s("未连接电脑");
+        int minutes = minutes(c, groupId);
+        long remainSec = Math.max(0L, minutes * 60L - total(c, groupId) / 1000L);
+        if ("gist".equals(source(c, groupId))) return T.f("离线估算 · 剩 %d 分钟", remainSec / 60);
         return T.f("与电脑共享 · 剩 %d 分钟", remainSec / 60);
+    }
+
+    static String summary(Context c) {
+        return summary(c, group(c));
     }
 }

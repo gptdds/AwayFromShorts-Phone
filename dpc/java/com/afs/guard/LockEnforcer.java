@@ -51,6 +51,7 @@ public final class LockEnforcer {
 
     public static void tick(Context c) {
         try {
+            if (!MasterSwitch.enabled(c)) return;
             long now = GuardClock.now(c).getTimeInMillis();
             PowerManager power = (PowerManager) c.getSystemService(Context.POWER_SERVICE);
             boolean interactive = power == null || power.isInteractive();

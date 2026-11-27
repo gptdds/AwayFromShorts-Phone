@@ -1,6 +1,9 @@
 package com.afs.blocker;
 
+import com.afs.core.rules.WeeklyRule;
+
 import java.util.Calendar;
+import java.util.TimeZone;
 
 /**
  * 纯 Java 的判定逻辑，不 import 任何 Android 类 —— 离线回归可以直接跑。
@@ -35,15 +38,11 @@ public final class Guard {
     /* ==================== 核心判定 ==================== */
 
     public static boolean inWindow(int minuteOfDay, int startMin, int endMin) {
-        int s = norm(startMin);
-        int e = norm(endMin);
-        if (s == e) {
-            return true;                 // 起止相同 = 全天放行
-        }
-        if (s < e) {
-            return minuteOfDay >= s && minuteOfDay < e;
-        }
-        return minuteOfDay >= s || minuteOfDay < e;   // 跨午夜
+        // 判定交给共享核心：这里只把"一条全局放行时段"表达成 ALLOW 模式的单段规则。
+        // DO 守卫用的是同一份 WeeklyRule（FREEZE 模式），两边不可能再算出不同结论。
+        WeeklyRule rule = WeeklyRule.allow(WeeklyRule.ALL_DAYS,
+                new int[][]{{norm(startMin), norm(endMin)}});
+        return !rule.blocked(0, minuteOfDay);
     }
 
     /**
@@ -101,28 +100,17 @@ public final class Guard {
      * 允许注入"现在"和窗口，方便离线回归用暴力扫描对拍。
      */
     public static long nextFlipMillis(Calendar now, int startMin, int endMin) {
-        boolean allow = inWindow(minuteOfDay(now), startMin, endMin);
-        int sh = norm(startMin) / 60;
-        int sm = norm(startMin) % 60;
-        int eh = norm(endMin) / 60;
-        int em = norm(endMin) % 60;
-        for (int dayOffset = 0; dayOffset <= 1; dayOffset++) {
-            for (int i = 0; i < 2; i++) {
-                Calendar t = (Calendar) now.clone();
-                t.add(Calendar.DAY_OF_YEAR, dayOffset);
-                t.set(Calendar.HOUR_OF_DAY, i == 0 ? sh : eh);
-                t.set(Calendar.MINUTE, i == 0 ? sm : em);
-                t.set(Calendar.SECOND, 0);
-                t.set(Calendar.MILLISECOND, 0);
-                if (t.getTimeInMillis() <= now.getTimeInMillis()) {
-                    continue;
-                }
-                if (inWindow(minuteOfDay(t), startMin, endMin) != allow) {
-                    return t.getTimeInMillis();
-                }
-            }
-        }
-        return now.getTimeInMillis() + 3600000L;
+        return WeeklyRule.allow(WeeklyRule.ALL_DAYS, new int[][]{{startMin, endMin}})
+                .nextFlip(now.getTimeInMillis(), now.getTimeZone());
+    }
+
+    public static boolean isBlocked(WeeklyRule rule, long now, long force, TimeZone zone) {
+        return force > now || rule.blocked(now, zone);
+    }
+
+    public static long nextTransition(WeeklyRule rule, long now, long force, TimeZone zone) {
+        if (force <= now) return rule.nextTransition(now, zone);
+        return rule.blocked(force, zone) ? rule.nextTransition(force, zone) : force;
     }
 
     private static int norm(int minuteOfDay) {

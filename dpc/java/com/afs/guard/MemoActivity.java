@@ -54,6 +54,8 @@ public final class MemoActivity extends ThemedActivity {
     private boolean historyBinding, previewing;
     /** 有序列表回车续号：改文本时自己触发的 TextWatcher 回调要跳过。 */
     private boolean listContinuing;
+    /** 删除末尾内容后光标也会落在换行后；只有正文没有变短时才可能是新敲了回车。 */
+    private int listLengthBeforeEdit;
     private TextView undoButton,redoButton,previewButton,editorStatus,previewText;
     private ScrollView previewScroll;
     private String exportText="";
@@ -551,10 +553,13 @@ public final class MemoActivity extends ThemedActivity {
         // 的事件序不保证 s 里立刻可见那个 \n，判定全落空。光标方案对事件序免疫：
         // 换行插入后光标必然紧跟在 \n 后面，删除内容贴着 \n 的情形 continueList 也会返回 null。
         bodyInput.addTextChangedListener(new TextWatcher(){
-            public void beforeTextChanged(CharSequence s,int start,int count,int after){}
+            public void beforeTextChanged(CharSequence s,int start,int count,int after){listLengthBeforeEdit=s.length();}
             public void onTextChanged(CharSequence s,int start,int before,int count){}
             public void afterTextChanged(Editable e){
-                if(listContinuing)return;
+                if(listContinuing||bodyInput.suppressListContinuation())return;
+                // 删掉“2. ”末尾的数字后，光标也会回到换行后；这不是回车，
+                // 若继续续号就会把刚删掉的序号补回来。
+                if(e.length()<listLengthBeforeEdit)return;
                 int cursor=bodyInput.getSelectionEnd();
                 if(cursor<=0||cursor>e.length()||e.charAt(cursor-1)!='\n')return;
                 MemoTextFormat.Change change=MemoTextFormat.continueList(e.toString(),cursor-1);

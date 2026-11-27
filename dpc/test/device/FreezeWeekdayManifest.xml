@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.afs.guard.weekdayqa">
+    <application android:label="AFS Freeze Weekday QA" />
+    <instrumentation
+        android:name="com.afs.guard.FreezeWeekdayDeviceTest"
+        android:targetPackage="com.afs.guard"
+        android:functionalTest="true" />
+</manifest>

@@ -32,11 +32,11 @@ public final class FreezeDeviceTest extends Instrumentation {
             Guard.apply(c);
             check(d.isPackageSuspended(admin, victim), "Guard.apply freezes an installed package");
             check(d.isUninstallBlocked(admin,victim), "target cannot be uninstalled");
-            check(d.isUninstallBlocked(admin,c.getPackageName()), "guard cannot be uninstalled");
+            check(d.isUninstallBlocked(admin,c.getPackageName()), "guard keeps its device-owner protection");
             Bundle restrictions = d.getUserRestrictions(admin);
             check(restrictions.getBoolean(UserManager.DISALLOW_FACTORY_RESET), "factory reset blocked");
             check(restrictions.getBoolean(UserManager.DISALLOW_SAFE_BOOT), "safe boot blocked");
-            check(restrictions.getBoolean(UserManager.DISALLOW_APPS_CONTROL), "app controls blocked");
+            check(!restrictions.getBoolean(UserManager.DISALLOW_APPS_CONTROL), "managed apps remain uninstallable");
             if (Build.VERSION.SDK_INT < 28) {
                 check(d.getAutoTimeRequired(), "automatic time enforced on Android 7/8");
                 Class<?> clock = Class.forName("com.afs.guard.GuardClock",true,c.getClassLoader());

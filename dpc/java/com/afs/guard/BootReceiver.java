@@ -18,7 +18,13 @@ public class BootReceiver extends BroadcastReceiver {
     public void onReceive(Context ctx, Intent intent) {
         GuardClock.pin(ctx);
         String action = intent == null ? "null" : intent.getAction();
+        if (Intent.ACTION_BOOT_COMPLETED.equals(action)) ctx.getSharedPreferences("afs_health",Context.MODE_PRIVATE).edit().putLong("boot_at",System.currentTimeMillis()).apply();
         Log.i(Guard.TAG, "BootReceiver: " + action);
+        if (!MasterSwitch.enabled(ctx)) {
+            Guard.cancelSchedules(ctx);
+            NetBlockService.reconcile(ctx);
+            return;
+        }
         Guard.applyAsync(ctx);
         Guard.schedule(ctx);
         Guard.ensureService(ctx);

@@ -357,8 +357,9 @@ public final class MemoryData {
         MemoryFlashcards.requirePending(this, id, now, expectedDate);
         JSONObject c = card(id), today = db.optJSONObject("plans").optJSONObject(date(now));
         JSONObject p = today == null ? null : today.optJSONObject(c.optString("deck"));
+        boolean wasNew=c.optInt("reps")==0;
         applyRating(c, rating, now, p, true);
-        MemoryFlashcards.complete(this, id, now);
+        MemoryFlashcards.complete(this, id, now,wasNew);
     }
     /** Derives a new state without generating a plan, log, queue, or touching the card. */
     public MemoryScheduler.State previewRating(String id, int rating, long now) {
@@ -366,21 +367,7 @@ public final class MemoryData {
         if (c == null || deleted(c.optString("deck"))) throw new IllegalArgumentException("Unknown or deleted memory card");
         JSONObject d = deck(c.optString("deck"));
         if (d == null) throw new IllegalArgumentException("Unknown memory subject");
-        MemoryScheduler.State n = MemoryScheduler.next(state(c), rating, now, retention(d), maxInterval(d));
-        // The three-button UI treats "vague" as needing another recall today.
-        // Keep the FSRS state update, but use its existing 15-minute hard relearning step.
-        if (rating == 2 && n.state == MemoryScheduler.REVIEW) {
-            n.state = MemoryScheduler.RELEARNING; n.step = 0; n.due = now + 900000L;
-        }
-        if (n.state == MemoryScheduler.REVIEW) {
-            // Day-based reviews become available at local midnight; minute-based steps keep exact times.
-            Calendar day = Calendar.getInstance(); day.setTimeInMillis(now);
-            int interval = (int) ((n.due - now) / MemoryScheduler.DAY);
-            day.add(Calendar.DAY_OF_MONTH, interval);
-            day.set(Calendar.HOUR_OF_DAY, 0); day.set(Calendar.MINUTE, 0); day.set(Calendar.SECOND, 0); day.set(Calendar.MILLISECOND, 0);
-            n.due = day.getTimeInMillis();
-        }
-        return n;
+        return LearningRules.next(c, rating, now, retention(d), maxInterval(d));
     }
     private boolean applyRating(JSONObject c, int rating, long now, JSONObject p, boolean flashcard) {
         String id = c.optString("id");

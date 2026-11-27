@@ -27,6 +27,7 @@ public final class MemoChecklistInput extends EditText {
     private Runnable beforeAction,afterAction;
     private int pressed=-1;
     private float downX,downY;
+    private boolean suppressListContinuation;
     private static final int ACTION_TOGGLE=0x01021001;
     public MemoChecklistInput(Context context){
         super(context);ui=new Ui(context);
@@ -46,11 +47,23 @@ public final class MemoChecklistInput extends EditText {
                         replaceDifference(text,change.body);
                         setSelection(Math.min(change.cursor,text.length()));binding=false;
                     }
+                }else if(removedCount>0&&insertedCount==0){
+                    suppressListContinuation=true;
+                    MemoTextFormat.Change change=MemoTextFormat.renumberAfterDeletion(
+                            before,text.toString(),insertedAt,removedCount,getSelectionEnd());
+                    if(change!=null&&change.body.length()<=MemoStore.MAX_BODY){
+                        binding=true;
+                        replaceDifference(text,change.body);
+                        setSelection(Math.min(change.cursor,text.length()));
+                        binding=false;
+                    }
+                    MemoChecklistInput.this.post(()->suppressListContinuation=false);
                 }
                 decorate();
             }
         });
     }
+    boolean suppressListContinuation(){return suppressListContinuation;}
     public void actions(Runnable before,Runnable after){beforeAction=before;afterAction=after;}
     public void checklist(){apply(MemoChecklist.convert(getText().toString(),getSelectionStart(),getSelectionEnd()));}
     public void toggle(int offset){
@@ -82,7 +95,7 @@ public final class MemoChecklistInput extends EditText {
         @Override public int getSize(Paint paint,CharSequence text,int start,int end,Paint.FontMetricsInt fm){return ui.dp(32);}
         @Override public void draw(Canvas canvas,CharSequence text,int start,int end,float x,int top,int y,int bottom,Paint original){
             Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);float radius=ui.dp(8),cx=x+ui.dp(11),cy=y+(original.ascent()+original.descent())/2;
-            paint.setStrokeWidth(ui.dp(1.5f));paint.setColor(checked?ui.accent():ui.text3());
+            paint.setStrokeWidth(ui.dp(ui.amap?1.15f:1.35f));paint.setColor(checked?ui.accent():ui.text3());
             paint.setStyle(checked?Paint.Style.FILL:Paint.Style.STROKE);canvas.drawCircle(cx,cy,radius,paint);
             if(checked){paint.setColor(ui.onAccent());paint.setStyle(Paint.Style.STROKE);paint.setStrokeCap(Paint.Cap.ROUND);paint.setStrokeJoin(Paint.Join.ROUND);
                 Path path=new Path();path.moveTo(cx-radius*.48f,cy);path.lineTo(cx-radius*.12f,cy+radius*.35f);path.lineTo(cx+radius*.53f,cy-radius*.37f);canvas.drawPath(path,paint);}

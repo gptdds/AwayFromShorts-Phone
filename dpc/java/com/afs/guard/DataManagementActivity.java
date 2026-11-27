@@ -19,11 +19,12 @@ public final class DataManagementActivity extends ThemedActivity {
     private void toast(String s){Toast.makeText(this,s,Toast.LENGTH_LONG).show();}
     private void setBusy(boolean value,String message){busy=value;if(operationStatus!=null){operationStatus.setText(message);operationStatus.setVisibility(value?android.view.View.VISIBLE:android.view.View.GONE);}}
     private void postResult(long token,Runnable result){runOnUiThread(()->{if(token==operation&&!isFinishing()&&!isDestroyed())result.run();});}
-    private void render(){body.removeAllViews();text(T.s("数据与备份"));operationStatus=new TextView(this);operationStatus.setTextColor(ui.text2());body.addView(operationStatus);setBusy(busy,T.s("操作处理中…"));text(T.s("数据保存在本机应用私有目录。此备份包含目标与打卡、记忆与图片、题库与答题、卡片文件、笔记与附件，以及冻结时段和额度。不包含全部设置或独立的禁忌认领罚时记录。ZIP 未加密，正文原样保存，请妥善保管。当前设备安全上限：解压后 ")+(LocalArchive.LIMIT/1024/1024)+T.s("MB。"));
-        button(T.s("导出完整本地备份"),()->pick(EXPORT));button(T.s("从完整备份恢复"),()->{if(!LocalBackup.mayRestore(this)){toast(T.s("完整覆盖恢复仅限未启用设备管理或首次配置期。日常内容导入请使用下方各模块入口。"));return;}pick(IMPORT);});
+    private void render(){body.removeAllViews();text(T.s("数据与备份"));operationStatus=new TextView(this);operationStatus.setTextColor(ui.text2());body.addView(operationStatus);setBusy(busy,T.s("操作处理中…"));text(T.f("数据保存在本机应用私有目录。整合备份包含目标与打卡、记忆与图片、题库与答题、卡片、笔记与附件、待办与日记、提醒与学习联动、自定规则和额度、外观与页面偏好、跨设备额度和 AI 接口设置（不含密钥），以及禁忌罚时计划。不包含云同步 / AI / 局域网凭据、解锁码与密钥、设备管理授权、首次宽限、同步缓存，以及应用私有目录外的自定义字体。ZIP 未加密，正文原样保存，请妥善保管。当前设备安全上限：解压后 %d MB。",LocalArchive.LIMIT/1024/1024));
+        button(T.s("导出整合本地备份"),()->pick(EXPORT));button(T.s("从整合本地备份恢复"),()->{if(!LocalBackup.mayRestore(this)){toast(T.s("整合覆盖恢复仅限未启用设备管理或首次配置期。日常内容导入请使用下方各模块入口。"));return;}pick(IMPORT);});
         String result=getSharedPreferences("afs_data_status",0).getString("result","");if(!result.isEmpty())text(result);
+        button(T.s("JSON 规则备份与恢复"),()->startActivity(new Intent(this,RuleBackupActivity.class)));
         text(T.s("模块备份与恢复"));button(T.s("目标与打卡备份"),()->startActivity(new Intent(this,CheckinActivity.class).putExtra("backup_only",true)));button(T.s("记忆备份（含图片与复习记录）"),()->startActivity(new Intent(this,MemoryActivity.class).putExtra("backup_only",true).putExtra(CardManagementActivity.EXTRA_MANAGE,true)));button(T.s("备忘录备份（含附件）"),()->startActivity(new Intent(this,MemoActivity.class).putExtra("backup_only",true)));
-        text(T.s("覆盖范围：这是白名单数据备份，并非全局镜像。不包含全部外观、自律规则、提醒设置、云端凭据或设备授权；云端配置在此仅保存接入信息，不等于自动备份。"));
+        text(T.s("覆盖范围：这是用户数据的白名单备份，并非系统级全局镜像。恢复只覆盖列明的数据；云端凭据、解锁密钥、设备授权、同步缓存和正在运行的提醒、计时状态不会随备份迁移。"));
         text(T.s("内容导入与导出"));button(T.s("记忆卡片：内容导入与导出"),()->startActivity(new Intent(this,MemoryActivity.class)));button(T.s("题库：导入与导出"),()->startActivity(new Intent(this,QuizActivity.class)));button(T.s("笔记：文件导入与导出"),()->startActivity(new Intent(this,MemoActivity.class)));
         text(T.s("云端同步 · ")+SyncSettings.state(this));
         button(SyncConfig.paused(this)?T.s("重新启用云端同步"):T.s("配置云端同步（Gist 目标与密钥）"),()->{
@@ -43,7 +44,7 @@ public final class DataManagementActivity extends ThemedActivity {
             if(request==EXPORT){try(OutputStream out=app.getContentResolver().openOutputStream(uri,"wt")){if(out==null)throw new IOException(T.s("无法打开目标文件"));LocalBackup.export(app,out);}
                 postResult(token,()->{setBusy(false,"");toast(T.s("本地备份已导出"));});
             }else{final String summary;try(InputStream in=app.getContentResolver().openInputStream(uri)){summary=LocalBackup.inspect(in);}
-                postResult(token,()->{setBusy(false,"");restorePreview=ThemeStore.dialog(this).setTitle(T.s("完整覆盖恢复？")).setMessage(summary+T.s("\n\n将覆盖本机对应数据。确认后应用会重启；写入失败会回滚，现有云端凭据和管理授权不变。建议先导出当前备份。"))
+                postResult(token,()->{setBusy(false,"");restorePreview=ThemeStore.dialog(this).setTitle(T.s("整合数据覆盖恢复？")).setMessage(summary+T.s("\n\n将覆盖本机对应数据。确认后应用会重启；写入失败会回滚，现有云端凭据和管理授权不变。建议先导出当前备份。"))
                     .setNegativeButton(T.s("取消"),null).setPositiveButton(T.s("恢复并重启"),(d,w)->queueRestore(uri)).show();});
             }
         }catch(Exception error){postResult(token,()->{setBusy(false,"");toast(T.s("操作失败：")+error.getMessage());});}},"afs-local-backup").start();

@@ -12,7 +12,7 @@ public final class AppearanceConfig {
     public static final int AMAP_COLOR=0xFF2D7DFF;
     public static final int[] PRESETS={DEFAULT_COLOR,0xFFAF52DE,0xFFFF2D55,0xFFFF3B30,
             0xFFFF9500,0xFFFFCC00,0xFF34C759,0xFF8E8E93};
-    public String mode="auto",style="vivid",animation="slide",glass="ultra",font="",skin="classic";
+    public String mode="auto",style="vivid",animation="slide",glass="ultra",font="",skin="amap";
     public boolean pureBlack,floating=true,customScale;
     public int seed=DEFAULT_COLOR;
     public int amapSeed=AMAP_COLOR;
@@ -26,7 +26,7 @@ public final class AppearanceConfig {
         if(raw==null||raw.trim().isEmpty())return c;
         try {
             JSONObject j=new JSONObject(raw);
-            c.skin=valid(j.optString("skin"),"classic","classic","amap");
+            c.skin="amap";
             c.amapSeed=j.optInt("amapSeed",AMAP_COLOR);if(c.amapSeed!=0)c.amapSeed|=0xFF000000;
             c.mode=valid(j.optString("mode"),"auto","auto","light","dark");
             c.style=valid(j.optString("style"),"vivid","vivid","tinted","soft","monochrome");
@@ -43,7 +43,7 @@ public final class AppearanceConfig {
     }
     public String json(){
         JSONObject j=new JSONObject();
-        try {j.put("mode",mode).put("skin",amap()?"amap":"classic").put("amapSeed",amapSeed).put("style",style).put("animation",animation).put("glass",glass)
+        try {j.put("mode",mode).put("skin","amap").put("amapSeed",amapSeed).put("style",style).put("animation",animation).put("glass",glass)
                 .put("font",font).put("pureBlack",pureBlack).put("floating",floating)
                 .put("customScale",customScale).put("scale",clampScale(scale)).put("seed",seed)
                 .put("colors",new JSONArray(colors));}catch(Exception ignored){}
@@ -53,15 +53,15 @@ public final class AppearanceConfig {
     public AppearanceConfig copy(){
         AppearanceConfig c=new AppearanceConfig();
         c.colors.clear();c.colors.addAll(colors);
-        c.mode=mode;c.style=style;c.animation=animation;c.glass=glass;c.font=font;c.skin=amap()?"amap":"classic";
+        c.mode=mode;c.style=style;c.animation=animation;c.glass=glass;c.font=font;c.skin="amap";
         c.pureBlack=pureBlack;c.floating=floating;c.customScale=customScale;
         c.seed=seed;c.amapSeed=amapSeed;c.scale=scale;
         return c;
     }
-    public boolean amap(){return "amap".equals(skin);}
-    public int selectedSeed(){return amap()?amapSeed:seed;}
-    public int defaultSeed(){return amap()?AMAP_COLOR:DEFAULT_COLOR;}
-    public void selectColor(int color){if(amap())amapSeed=color;else seed=color;}
+    public boolean amap(){return true;}
+    public int selectedSeed(){return amapSeed;}
+    public int defaultSeed(){return AMAP_COLOR;}
+    public void selectColor(int color){amapSeed=color;}
     public void addColor(int color){color|=0xFF000000;if(!colors.contains(color))colors.add(color);selectColor(color);}
     public void editColor(int oldColor,int newColor){
         oldColor|=0xFF000000;newColor|=0xFF000000;
@@ -73,7 +73,7 @@ public final class AppearanceConfig {
     public void removeColor(int color){
         colors.remove(Integer.valueOf(color));
         if(seed==color)seed=colors.contains(DEFAULT_COLOR)?DEFAULT_COLOR:0;
-        if(amapSeed==color)amapSeed=color==AMAP_COLOR?DEFAULT_COLOR:AMAP_COLOR;
+        if(amapSeed==color)amapSeed=color==AMAP_COLOR?(colors.isEmpty()?0:colors.get(0)):AMAP_COLOR;
     }
     public void resetColors(){colors.clear();for(int c:PRESETS)colors.add(c);selectColor(defaultSeed());style="vivid";}
     public static int parseHex(String text){

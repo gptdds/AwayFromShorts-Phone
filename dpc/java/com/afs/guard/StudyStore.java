@@ -64,6 +64,8 @@ public final class StudyStore {
         public boolean hitAtImport;
         public String importDate = "";
         public boolean archived;
+        /** 下滑这张目标卡时，执行禁忌卡认领的惩罚效果。 */
+        public boolean downTaboo;
     }
 
     /** 一笔打卡。 */
@@ -175,21 +177,28 @@ public final class StudyStore {
             if (o == null) {
                 continue;
             }
-            G g = new G();
-            g.id = o.optString("id", "");
-            g.name = o.optString("name", "");
-            g.unit = o.optString("unit", "个");
-            g.total = o.optDouble("total", 0);
-            g.base = o.optDouble("base", 0);
-            g.due = o.optString("due", "");
-            g.hitAtImport = o.optBoolean("hitAtImport", false);
-            g.importDate = o.optString("importDate", "");
-            g.archived = o.optBoolean("archived", false);
+            G g = goalFrom(o);
             if (!g.id.isEmpty() && !g.name.isEmpty() && !g.archived) {
                 out.add(g);
             }
         }
         return out;
+    }
+
+    /** JSON → 目标。旧数据没有 downTaboo 字段，按默认关闭处理。 */
+    static G goalFrom(JSONObject o) {
+        G g = new G();
+        g.id = o.optString("id", "");
+        g.name = o.optString("name", "");
+        g.unit = o.optString("unit", "个");
+        g.total = o.optDouble("total", 0);
+        g.base = o.optDouble("base", 0);
+        g.due = o.optString("due", "");
+        g.hitAtImport = o.optBoolean("hitAtImport", false);
+        g.importDate = o.optString("importDate", "");
+        g.archived = o.optBoolean("archived", false);
+        g.downTaboo = o.optBoolean("downTaboo", false);
+        return g;
     }
 
     public static boolean hasGoals(Context c) {
@@ -253,18 +262,19 @@ public final class StudyStore {
         }
     }
 
-    private static JSONObject goalJson(G g) {
+    static JSONObject goalJson(G g) {
         JSONObject o = new JSONObject();
         try {
             o.put("id", g.id);
             o.put("name", g.name);
             o.put("unit", g.unit);
             o.put("total", g.total);
-        o.put("base", g.base);
-        o.put("due", g.due == null ? "" : g.due);
-        o.put("hitAtImport", g.hitAtImport);
-        o.put("importDate", g.importDate == null ? "" : g.importDate);
-        o.put("archived", g.archived);
+            o.put("base", g.base);
+            o.put("due", g.due == null ? "" : g.due);
+            o.put("hitAtImport", g.hitAtImport);
+            o.put("importDate", g.importDate == null ? "" : g.importDate);
+            o.put("archived", g.archived);
+            o.put("downTaboo", g.downTaboo);
         } catch (Throwable ignored) {
         }
         return o;
@@ -601,6 +611,7 @@ public final class StudyStore {
             u.todayHit = hitToday(all, g, d);
             u.localHit = u.todayHit;
             u.suggest = suggest(g, u.done);
+            u.downTaboo = g.downTaboo;
             out.add(u);
         }
         // 没打的排前面，其次按建议量从少到多 —— 先打最容易补上的那个
@@ -841,6 +852,61 @@ public final class StudyStore {
     public static String plusDays(int days) {
         return new SimpleDateFormat("yyyy-MM-dd", Locale.US)
                 .format(new Date(System.currentTimeMillis() + days * 86400000L));
+    }
+
+    /* ==================== 目标卡「下滑按禁忌卡」当天已处理 ==================== */
+
+    /**
+     * 目标卡下滑执行禁忌惩罚后，记一笔"今天已处理"：
+     * 这张卡当天不再重复弹出来，也不会被重复扣罚；
+     * 但它不是打卡记录 —— 进度、pendingToday 和 20:00 罚时判定一律不读这里。
+     */
+    private static final String DOWN_SP = "afs_goal_down";
+    private static final String DOWN_KEY = "handled";
+
+    public static void markDownHandled(Context c, String goalId, long ts) {
+        if (goalId == null || goalId.isEmpty()) {
+            return;
+        }
+        synchronized (LOCK) {
+            android.content.SharedPreferences sp =
+                    c.getSharedPreferences(DOWN_SP, Context.MODE_PRIVATE);
+            try {
+                JSONObject o = new JSONObject(sp.getString(DOWN_KEY, "{}"));
+                JSONObject keep = new JSONObject();
+                long edge = ts - 7L * 24 * 3600_000L;
+                java.util.Iterator<String> it = o.keys();
+                while (it.hasNext()) {
+                    String k = it.next();
+                    long v = o.optLong(k, 0L);
+                    if (v >= edge) {
+                        keep.put(k, v);
+                    }
+                }
+                keep.put(goalId, ts);
+                sp.edit().putString(DOWN_KEY, keep.toString()).apply();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 纯判定（离线可测）：某目标在 [from, to) 内是否下滑按禁忌卡处理过。 */
+    static boolean downHandledOn(String json, String goalId, long fromMs, long toMs) {
+        if (goalId == null || goalId.isEmpty()) {
+            return false;
+        }
+        try {
+            long ts = new JSONObject(json).optLong(goalId, 0L);
+            return ts > 0 && ts >= fromMs && ts < toMs;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    static boolean downHandledToday(Context c, String goalId) {
+        long now = System.currentTimeMillis();
+        return downHandledOn(c.getSharedPreferences(DOWN_SP, Context.MODE_PRIVATE)
+                .getString(DOWN_KEY, "{}"), goalId, StudyGate.dayStartMs(now), StudyGate.dayEndMs(now));
     }
 
     /** 数据变了：让闸门下一拍就用新数据重判（不再等 10 分钟节流）。 */

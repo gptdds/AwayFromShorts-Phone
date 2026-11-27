@@ -25,6 +25,12 @@ import java.util.Set;
  */
 public class KeywordGuardService extends AccessibilityService {
 
+    private static volatile boolean live;
+    static boolean connected() { return live; }
+
+    @Override public boolean onUnbind(Intent intent) { live = false; return super.onUnbind(intent); }
+    @Override public void onDestroy() { live = false; super.onDestroy(); }
+
     private static final long SCAN_GAP_MS = 800L;
     private static final long BLOCK_GAP_MS = 4000L;
     private static final int MAX_NODES = 240;
@@ -48,12 +54,14 @@ public class KeywordGuardService extends AccessibilityService {
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        live = true;
         Log.i(Guard.TAG, "keyword service connected");
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         try {
+            if (!MasterSwitch.enabled(this)) return;
             if (event == null) return;
             int type = event.getEventType();
             if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED

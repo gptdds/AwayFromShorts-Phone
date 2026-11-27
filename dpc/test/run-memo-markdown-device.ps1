@@ -1,6 +1,6 @@
-param([string]$Python,[string]$Serial='emulator-5580')
+param([string]$Python,[string]$Serial='emulator-5580',[switch]$AllowPhysical)
 $ErrorActionPreference='Stop'
-if($Serial -notlike "emulator-*"){throw "Sync fixture tests require an emulator serial"}
+if($Serial -notlike "emulator-*" -and !$AllowPhysical){throw "Physical devices require -AllowPhysical"}
 $taskRoot=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $taskSdk=Join-Path $env:USERPROFILE '.afs-android/sdk'
 $taskAndroid=Join-Path $taskSdk 'platforms/android-34/android.jar'

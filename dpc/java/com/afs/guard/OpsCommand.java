@@ -76,8 +76,10 @@ final class OpsCommand {
             return;
         }
         try {
+            String externalBefore = ExternalAdjustment.snapshot(c);
             applyQuotaMinutes(c, command.optJSONObject("quotaMinutes"));
             applyFreezeWindows(c, command.optJSONObject("freezeWindows"));
+            ExternalAdjustment.recordIfChanged(c, externalBefore, T.s("运维指令"));
             Guard.apply(c);
             Log.i(TAG, "command applied");
         } catch (Exception error) {

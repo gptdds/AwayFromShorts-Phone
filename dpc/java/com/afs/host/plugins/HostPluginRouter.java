@@ -14,6 +14,7 @@ import android.os.Looper;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.View;
 
 import com.afs.guard.Lang;
@@ -301,6 +302,8 @@ public final class HostPluginRouter {
 
         void fail(String message) {
             if (!gate.fail()) return;
+            Log.w("AFS", "plugin prepare failed pkg=" + entry.packageName()
+                    + " page=" + page.id + " cause=" + message);
             unbind();
             failure(failure, message);
         }

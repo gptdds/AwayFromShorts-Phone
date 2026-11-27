@@ -1,0 +1,94 @@
+uniform shader image;
+uniform float2 textureSize, resolution, extent, origin, finger;
+uniform float time, pressure, releaseAge, material, pageAge;
+
+float smoothUnion(float first, float second, float radius) {
+    float blend = clamp(.5 + .5 * (second - first) / radius, 0., 1.);
+    return mix(second, first, blend) - radius * blend * (1. - blend);
+}
+
+float blob(float2 point, float2 center, float radius) {
+    return length(point - center) - radius;
+}
+
+// A depth-aware metaball field. The surface is shaded analytically; no ray marching
+// is performed per pixel, so the live material stays within a mobile frame budget.
+float field(float2 point) {
+    float2 touch = (finger - .5) * float2(1.5, 1.);
+    float influence = pressure * exp(-dot(point - touch, point - touch) * 4.5);
+    point += (point - touch) * influence * .34;
+    point += float2(sin(point.y * 5.1 + time * .24), cos(point.x * 4.7 - time * .21)) * .028;
+
+    float first = blob(point, float2(-.68 + .14 * sin(time * .29), .12 + .11 * cos(time * .25)), .29);
+    float second = blob(point, float2(.18 + .15 * cos(time * .23), -.03 + .12 * sin(time * .31)), .36);
+    float third = blob(point, float2(.65 + .10 * sin(time * .37), .28 + .09 * cos(time * .27)), .23);
+    float body = smoothUnion(smoothUnion(first, second, .17), third, .15);
+
+    if (material > .5) {
+        // MEDIUM keeps the readable three-lobe silhouette with a single cavity.
+        float cavity = blob(point, float2(.05 + .07 * sin(time * .34), .06 + .05 * cos(time * .26)), .18);
+        return max(body, -cavity);
+    } else {
+        float lower = blob(point, float2(-.12 + .17 * sin(time * .19 + 1.), -.43 + .08 * cos(time * .28)), .25);
+        float satellite = blob(point, float2(.48 + .12 * cos(time * .33 + 2.), -.36 + .10 * sin(time * .22)), .14);
+        body = smoothUnion(smoothUnion(body, lower, .14), satellite, .11);
+        float cavity = blob(point, float2(.05 + .07 * sin(time * .34), .06 + .05 * cos(time * .26)), .18);
+        body = max(body, -cavity);
+        float scar = blob(point, float2(.28 + .06 * cos(time * .27), .14 + .06 * sin(time * .19)), .10);
+        return max(body, -scar);
+    }
+}
+
+half3 palette(float2 point, float timeValue) {
+    float first = clamp(.5 + .5 * sin(point.x * 2.4 + point.y * 3.2 - timeValue * .24), 0., 1.);
+    float second = clamp(.5 + .5 * cos(point.y * 3.0 - point.x * 2.5 + timeValue * .18), 0., 1.);
+    float third = clamp(.5 + .5 * sin(point.x * 2.0 + point.y * 2.7 + timeValue * .15 + 1.6), 0., 1.);
+    half3 color = mix(half3(.015, .25, 1.), half3(.48, .08, .96), first);
+    color = mix(color, half3(1., .06, .42), second * .72);
+    color = mix(color, half3(.01, .82, .62), third * .42);
+    return color;
+}
+
+half4 main(float2 coordinate) {
+    float2 world = coordinate + origin;
+    float2 uv = clamp(world / resolution, 0., 1.);
+    float2 point = (uv - .5) * float2(resolution.x / resolution.y, 1.) * 2.;
+    point.y *= .92;
+
+    float distance = field(point);
+    // One-sided differences avoid the two extra field evaluations of a centred gradient.
+    float epsilon = .012;
+    float2 gradient = float2(
+        field(point + float2(epsilon, 0.)) - distance,
+        field(point + float2(0., epsilon)) - distance
+    ) / epsilon;
+    float3 normal = normalize(float3(-gradient * .42, 1.));
+
+    half3 ambient = image.eval(clamp(uv * .76 + float2(.12, .12) + normal.xy * .035, 0., 1.) * textureSize).rgb;
+    half3 pigment = palette(point, time);
+    half3 backdrop = mix(half3(.004, .009, .032), ambient * .22, .48);
+    float aura = exp(-max(distance, 0.) * 3.2) * .13;
+    backdrop += pigment * aura;
+
+    float inside = 1. - smoothstep(-.018, .028, distance);
+    float rim = 1. - smoothstep(0., .075, abs(distance));
+    float3 light = normalize(float3(-.62 + finger.x * .9, .50 - finger.y * .65, 1.15));
+    float diffuse = clamp(dot(normal, light), 0., 1.);
+    float specular = pow(clamp(dot(normal, normalize(light + float3(0., 0., 1.))), 0., 1.), 36.);
+    float edgeLight = pow(1. - clamp(normal.z, 0., 1.), 2.2);
+
+    half3 liquid = pigment * (.17 + .86 * diffuse);
+    liquid *= .62 + .48 * smoothstep(-.65, .55, point.y);
+    liquid += pigment * edgeLight * .42;
+    liquid += half3(.84, .96, 1.) * specular * .92;
+    liquid += half3(.10, .46, .62) * rim * .18;
+
+    float2 touch = point - (finger - .5) * float2(1.5, 1.);
+    float wave = exp(-abs(length(touch) - releaseAge * .72) * 22.) * exp(-releaseAge * 3.2);
+    liquid += half3(.12, .52, .58) * wave * .18;
+
+    float reveal = smoothstep(0., .32, pageAge);
+    half3 color = mix(backdrop, liquid, inside * .94 * reveal);
+    color += pigment * rim * .035;
+    return half4(clamp(color, 0., 1.), 1.);
+}

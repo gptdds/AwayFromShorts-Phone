@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.afs.guard.pluginqa">
+    <application android:label="AFS Inspect QA" />
+    <instrumentation
+        android:name="com.afs.guard.pluginqa.InspectDeviceTest"
+        android:targetPackage="com.afs.guard"
+        android:functionalTest="true" />
+</manifest>

@@ -45,7 +45,6 @@ final class ThemePreviewView extends View {
     private void drawScreen(Canvas c,boolean dark){
         AppearancePalette a=ThemeStore.palette(config,dark,ThemeStore.systemSeed(getContext()));
         box(c,0,0,96,160,14,a.bg);
-        if(config.amap()){p.setShader(new android.graphics.LinearGradient(0,0,0,55,dark?0xFF173047:0xFFDFF3FF,a.bg,android.graphics.Shader.TileMode.CLAMP));rect.set(0,0,96,160);c.drawRoundRect(rect,14,14,p);p.setShader(null);}
         box(c,7,10,36,5,2.5f,a.text2);box(c,80,9,9,9,4.5f,a.surface);
         c.save();c.clipRect(0,23,96,141);
         if(progress<1){
@@ -55,14 +54,11 @@ final class ThemePreviewView extends View {
         if("fade".equals(config.animation)&&progress<1){c.saveLayerAlpha(0,23,96,141,(int)(255*progress));page(c,selected,a);c.restore();}
         else {c.save();if(progress<1)c.translate((previous<selected?1:-1)*96*(1-progress),0);page(c,selected,a);c.restore();}
         c.restore();
-        boolean glass=config.floating&&!"none".equals(config.glass);
-        int fill=glass?AppearancePaletteBlend.mix(a.surface,a.bg,.3f):a.surface;
         float x=config.floating?5:0,y=config.floating?139:136,w=config.floating?86:96,h=config.floating?16:24;
-        box(c,x,y,w,h,config.floating?8:0,fill);
-        if(glass){p.setColor(dark?0x55FFFFFF:0xAFFFFFFF);p.setStyle(Paint.Style.STROKE);p.setStrokeWidth(.5f);rect.set(x,y,x+w,y+h);c.drawRoundRect(rect,8,8,p);}
+        box(c,x,y,w,h,config.floating?4:0,a.surface);
 
         float slot=w/5;box(c,x+selected*slot+1,y+1,slot-2,h-2,7,a.selection);
-        for(int i=0;i<5;i++){int color=i==selected?a.accent:a.text2;if(config.amap()){c.save();c.translate(x+i*slot+slot/2-3,y+2);c.scale(6f/28,6f/28);AmapStyle.glyph(c,p,new String[]{T.s("打卡"),T.s("记忆"),T.s("守卫"),T.s("刷题"),T.s("冻结")}[i],color,i==selected);c.restore();}else box(c,x+i*slot+slot/2-2.5f,y+3,5,5,2,color);box(c,x+i*slot+slot/2-4,y+h-5,8,1.5f,1,color);}
+        for(int i=0;i<5;i++){int color=i==selected?a.accent:a.text2;c.save();c.translate(x+i*slot+slot/2-3,y+2);c.scale(6f/28,6f/28);AmapStyle.glyph(c,p,new String[]{T.s("打卡"),T.s("记忆"),T.s("守卫"),T.s("刷题"),T.s("冻结")}[i],color,false);c.restore();box(c,x+i*slot+slot/2-4,y+h-5,8,1.5f,1,color);}
     }
     private void page(Canvas c,int page,AppearancePalette a){
         if(page==0){

@@ -20,6 +20,12 @@ public final class ReminderStore {
     private static final String K_LAST = "last";
     private static final String K_PENDING = "pending";
     private static final String K_CONFIRM = "confirm";
+    /** 有一条已经弹出去、还没被打发走的提醒弹窗；进程被杀把它带走后靠这个记号补弹。 */
+    private static final String K_LIVE = "live";
+    /** 本轮累计的亮屏毫秒：从亮屏开始统计，息屏清零。 */
+    private static final String K_ACCUM = "accum";
+    /** 上次亮屏采样时刻；0 表示这次亮屏要重新起算。 */
+    private static final String K_TICK = "tick";
 
     /** 提醒卡片自己消失前停留多久；不点也走，别让一次轻提醒卡在屏幕上。 */
     public static final long AUTO_DISMISS_MS = 15_000L;
@@ -48,10 +54,13 @@ public final class ReminderStore {
     public static void setOn(Context c, boolean value) {
         sp(c).edit().putBoolean(K_ON, value).apply();
         if (value) {
-            // 刚打开就从"现在"起算：不然会立刻弹一条，像是坏了
+            // 刚打开从下一次亮屏重新起算：不然会立刻弹一条，像是坏了
+            resetCounting(c);
             setLastFired(c, System.currentTimeMillis());
         } else {
             setLastFired(c, 0L);
+            resetCounting(c);
+            setLive(c, false);   // 提醒整个关掉了，挂着的那条自然也不算数
         }
     }
 
@@ -61,7 +70,8 @@ public final class ReminderStore {
 
     public static void setEvery(Context c, int minutes) {
         sp(c).edit().putInt(K_EVERY, clamp(minutes, 1, RestReminder.MAX_EVERY)).apply();
-        setLastFired(c, System.currentTimeMillis());   // 改了间隔重新起算
+        resetCounting(c);                              // 改了间隔重新起算
+        setLastFired(c, System.currentTimeMillis());
     }
 
     /**
@@ -101,6 +111,26 @@ public final class ReminderStore {
         sp(c).edit().putLong(K_LAST, ms).apply();
     }
 
+    /** 本轮累计的亮屏毫秒数。 */
+    public static long accum(Context c) {
+        return sp(c).getLong(K_ACCUM, 0L);
+    }
+
+    /** 上一次亮屏采样时刻；0 表示下次亮屏重新起算。 */
+    public static long lastTick(Context c) {
+        return sp(c).getLong(K_TICK, 0L);
+    }
+
+    /** 一拍里同时落累计值与采样时刻，避免每个节拍写两次盘。 */
+    static void saveCounting(Context c, long accumMs, long tickMs) {
+        sp(c).edit().putLong(K_ACCUM, accumMs).putLong(K_TICK, tickMs).apply();
+    }
+
+    /** 亮屏计时归零：息屏、刚启用、改间隔、发出提醒后都走这里。 */
+    static void resetCounting(Context c) {
+        saveCounting(c, 0L, 0L);
+    }
+
     /**
      * 上一次被系统拦下、还没弹出去的提醒时刻；0 表示没有待补的。
      *
@@ -113,6 +143,21 @@ public final class ReminderStore {
 
     public static void setPending(Context c, long ms) {
         sp(c).edit().putLong(K_PENDING, ms).apply();
+    }
+
+    /**
+     * 有没有一条「已经弹出去、还没被打发走」的提醒弹窗。
+     *
+     * 弹出页面时记 true，走正当渠道关掉（{@code RestAlert.clear}）记 false。
+     * 进程被杀会把页面一起带走但杀不掉这个记号 —— 下一个节拍看到「挂着记号却没页面」
+     * 就知道该补弹了，杀进程不能再当关提醒的捷径。
+     */
+    public static boolean live(Context c) {
+        return sp(c).getBoolean(K_LIVE, false);
+    }
+
+    public static void setLive(Context c, boolean value) {
+        sp(c).edit().putBoolean(K_LIVE, value).apply();
     }
 
     /** "08:00–22:00" 这种时段文案，和锁机那边同一格式。 */

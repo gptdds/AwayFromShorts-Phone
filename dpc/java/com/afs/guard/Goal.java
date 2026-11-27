@@ -20,6 +20,8 @@ final class Goal {
     boolean todayHit;
     /** 本地刚打过卡（远端还没记账），用来立刻显示"已打"。 */
     boolean localHit;
+    /** 开启后，下滑这张目标卡按禁忌卡认领效果执行。 */
+    boolean downTaboo;
 
     boolean hit() {
         return todayHit || localHit;

@@ -51,7 +51,7 @@ def main() -> None:
     parser.add_argument('--version', default=default_version)
     parser.add_argument('--version-code', type=int, default=default_code)
     parser.add_argument('--maintenance-version-code', type=int, default=0)
-    parser.add_argument('--repo', default='sdgfdii/AwayFromShorts-Phone',
+    parser.add_argument('--repo', default='gptdds/AwayFromShorts-Phone',
                         help='owner/repo, used to build mirror download links')
     parser.add_argument('--notes', default='', help='release notes written into manifest.json')
     parser.add_argument('--notes-file', type=Path, help='read release notes from this file')
@@ -81,10 +81,11 @@ def main() -> None:
         if f'certificate SHA-256 digest: {cert}' not in info:
             raise SystemExit('Unexpected signing certificate')
         xml = subprocess.check_output([str(bt/'aapt2.exe'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', str(file)], text=True, encoding='utf-8')
-        if ('".RecoveryReceiver"' in xml) != maintenance:
+        if bool(re.search(r'"(?:com\.afs\.guard)?\.RecoveryReceiver"', xml)) != maintenance:
             raise SystemExit('Production / maintenance receiver isolation failed')
-        if 'testOnly' in xml or 'debuggable' in xml:
-            raise SystemExit('Test/debug manifest flag is not permitted')
+        for line in xml.splitlines():
+            if re.search(r'android:(?:testOnly|debuggable)\(', line) and not re.search(r'=\(type 0x12\)0x0+\s*$', line):
+                raise SystemExit('Test/debug manifest flag is not permitted')
         if maintenance and '"android.permission.DUMP"' not in xml:
             raise SystemExit('Maintenance receiver is not protected')
         badging = subprocess.check_output([str(bt/'aapt2.exe'), 'dump', 'badging', str(file)], text=True, encoding='utf-8')
@@ -128,13 +129,16 @@ def main() -> None:
         windows['tools/'+name] = (args.sdk/'platform-tools'/name).read_bytes()
     source = {'README.md': readme, 'LICENSE': (root/'LICENSE').read_bytes(),
               '.gitignore': b'/dist/\ndpc/build/\ndpc/keystore/\n*.keystore\n*.jks\n*.idsig\n*.local\n__pycache__/\n'}
-    for folder in ['dpc/java','dpc/res','dpc/assets','dpc/libs','dpc/test','dpc/deploy','dpc/release','docs/examples','docs/memo-complete']:
+    for folder in ['dpc/java','dpc/res','dpc/assets','dpc/libs','dpc/test','dpc/deploy','dpc/release','docs/examples','docs/memo-complete',
+                   'app/src','core','feature','style','gradle/wrapper','plugin-api']:
         for p in (root/folder).rglob('*'):
-            if p.is_file() and '__pycache__' not in p.parts and p.suffix not in {'.pyc','.log','.apk','.idsig','.keystore','.jks'}:
+            if p.is_file() and not {'__pycache__','build','.gradle'}.intersection(p.relative_to(root).parts) and p.suffix not in {'.pyc','.log','.apk','.idsig','.keystore','.jks'}:
                 source[p.relative_to(root).as_posix()] = p.read_bytes()
+    for name in ['settings.gradle.kts','build.gradle.kts','gradle.properties','gradlew','gradlew.bat','app/build.gradle.kts']:
+        source[name] = (root/name).read_bytes()
     for name in ['AndroidManifest.xml','build.sh','deploy.sh','uninstall.sh']:
         source['dpc/'+name] = (root/'dpc'/name).read_bytes()
-    for name in ['DEPLOYMENT-AND-USABILITY.md','USABILITY-1790.md','LOCAL-DATA-BACKUP.md','CARD-MANAGEMENT.md','MEMO.md','MEMO-REFERENCE.md','MEMORY.md','MEMORY-CARD-SCRIPT.md','MATH-QUIZ.md','QUIZ-IMPORT-SCRIPT.md','THEME.md','AMAP-STYLE.md','SWISS-LAYOUT.md','PERF.md','TOOLBOX.md','VIRTUAL-TESTING.md','RENDERING-OPTIMIZATION.md']:
+    for name in ['DEPLOYMENT-AND-USABILITY.md','USABILITY-1790.md','LOCAL-DATA-BACKUP.md','CARD-MANAGEMENT.md','MEMO.md','MEMO-REFERENCE.md','MEMORY.md','MEMORY-CARD-SCRIPT.md','MATH-QUIZ.md','QUIZ-IMPORT-SCRIPT.md','THEME.md','AMAP-STYLE.md','SWISS-LAYOUT.md','PERF.md','TOOLBOX.md','VIRTUAL-TESTING.md','RENDERING-OPTIMIZATION.md','STYLE-ENGINE.md','STYLE-ACCEPTANCE.md','PHASE3-AUDIT.md','PHASE3-SCHEMA.md','PHASE3-REPORT.md']:
         source['docs/'+name] = (root/'docs'/name).read_bytes()
     source['dpc/README.md'] = b'See the repository README for deployment, recovery, building and verification.\n'
     for p in (root/'scripts').iterdir():

@@ -46,7 +46,9 @@ final class ThemeStore {
     static long revision(Context c){return prefs(c).getLong(REVISION,0);}
     static boolean dark(Context c){String mode=load(c).mode;return "dark".equals(mode)||("auto".equals(mode)
             &&(c.getResources().getConfiguration().uiMode&Configuration.UI_MODE_NIGHT_MASK)==Configuration.UI_MODE_NIGHT_YES);}
-    static String signature(Context c){return revision(c)+":"+dark(c)+":"+systemSeed(c);}
+    /** 签名必须带上界面风格：否则换成风格后页面不会重建，底色和文字还停在上一种风格。 */
+    static String signature(Context c){return revision(c)+":"+dark(c)+":"+systemSeed(c)+":"
+            +com.afs.guard.style.StyleManager.selected(c);}
     static int systemSeed(Context c){
         if(Build.VERSION.SDK_INT>=31){int id=c.getResources().getIdentifier("system_accent1_500","color","android");if(id!=0)return c.getColor(id);}
         return AppearanceConfig.DEFAULT_COLOR;
@@ -107,6 +109,12 @@ final class ThemeStore {
     };}
     static void styleDialog(AlertDialog dialog){
         Ui ui=new Ui(dialog.getContext());
+        if(!"paper".equals(ui.style())&&dialog.getWindow()!=null){
+            android.graphics.drawable.GradientDrawable panel=new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    StyleMood.glass(ui.style())?new int[]{0xFFF3FAFC,0xFFDFEEF4}:StyleMood.spatial(ui.style())?new int[]{0xFFFFF8E5,0xFFF6E7C7}:new int[]{0xFFCB3A3A,0xFFA81E4E});
+            panel.setCornerRadius(ui.dp(28));panel.setStroke(Math.max(1,ui.dp(StyleMood.stroke(ui.style(),1))),ui.line());dialog.getWindow().setBackgroundDrawable(panel);
+            styleDialogText(dialog.getWindow().getDecorView(),ui);
+        }
         if(dialog.getWindow()!=null){View root=dialog.getWindow().getDecorView();typography(root);SwissTypography.observe(root);tintChoices(root,ui);}
         for(int button:new int[]{AlertDialog.BUTTON_POSITIVE,AlertDialog.BUTTON_NEGATIVE,AlertDialog.BUTTON_NEUTRAL}){
             android.widget.Button b=dialog.getButton(button);if(b!=null){String label=b.getText().toString();b.setTextColor(ActionFeedback.textColors(button==AlertDialog.BUTTON_POSITIVE&&(label.contains("删除")||label.contains("重置")||label.contains("移入回收站"))?ui.red():ui.accent()));}
@@ -118,5 +126,10 @@ final class ThemeStore {
         if(view instanceof android.widget.CompoundButton)((android.widget.CompoundButton)view).setButtonTintList(
                 new android.content.res.ColorStateList(new int[][]{new int[]{android.R.attr.state_checked},new int[]{}},new int[]{ui.accent(),ui.text3()}));
         if(view instanceof ViewGroup){ViewGroup g=(ViewGroup)view;for(int i=0;i<g.getChildCount();i++)tintChoices(g.getChildAt(i),ui);}
+    }
+    private static void styleDialogText(View view,Ui ui){
+        if(view instanceof android.widget.TextView){android.widget.TextView text=(android.widget.TextView)view;text.setTextColor(ui.text());text.setHintTextColor(ui.text2());}
+        if(view instanceof android.widget.EditText)view.setBackgroundTintList(android.content.res.ColorStateList.valueOf(ui.accent()));
+        if(view instanceof ViewGroup){ViewGroup group=(ViewGroup)view;for(int i=0;i<group.getChildCount();i++)styleDialogText(group.getChildAt(i),ui);}
     }
 }

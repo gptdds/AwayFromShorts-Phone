@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.afs.guard.pluginsigningqa">
+    <application android:label="AFS Plugin Signing QA" />
+    <instrumentation android:name="com.afs.host.plugins.PluginSigningDeviceTest" android:targetPackage="com.afs.guard" android:functionalTest="true" />
+    <instrumentation android:name="com.afs.guard.ScreenStatsDeviceTest" android:targetPackage="com.afs.guard" android:functionalTest="true" />
+</manifest>

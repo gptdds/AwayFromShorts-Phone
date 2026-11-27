@@ -31,7 +31,9 @@ public final class QuotaBlockedActivity extends ThemedActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         String next = intent.getStringExtra(EXTRA_PACKAGE);
-        if (next != null && !next.equals(pkg)) { pkg = next; render(); }
+        if (next != null && !next.equals(pkg)) {
+            pkg = next; render();
+        }
     }
 
     @Override protected void onResume() {

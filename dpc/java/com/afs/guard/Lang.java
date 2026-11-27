@@ -3,6 +3,8 @@ package com.afs.guard;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import com.afs.guard.plugins.DockPages;
+
 import java.util.Locale;
 
 /**
@@ -23,9 +25,6 @@ public final class Lang {
     public static final String SYSTEM = "system";
     public static final String ZH = "zh";
     public static final String EN = "en";
-
-    /** 底栏五个标签的中文原文；英文由翻译表给出，顺序与 FloatingNav 的页序一致。 */
-    private static final String[] NAV = {"记忆", "刷题", "冻结", "打卡", "守卫"};
 
     private Lang() {
     }
@@ -62,9 +61,10 @@ public final class Lang {
     /** 底栏五个标签，顺序与 FloatingNav 的页序一致。 */
     public static String[] nav(Context c) {
         boolean en = english(c);
-        String[] out = new String[NAV.length];
+        String[] labels = DockPages.labels();
+        String[] out = new String[labels.length];
         // 不能用 T.s：它读进程级 english 开关，静态初始化时可能还没就位。
-        for (int i = 0; i < NAV.length; i++) out[i] = en ? T.en(NAV[i]) : NAV[i];
+        for (int i = 0; i < labels.length; i++) out[i] = en ? T.en(labels[i]) : labels[i];
         return out;
     }
 

@@ -54,6 +54,22 @@ public class MemoryActivity extends ThemedActivity {
     private boolean revealed, submitting, graded;
     private boolean flashMode;
     private boolean motionResumed;
+    private final Speech.CardAutoplay cardAutoplay=new Speech.CardAutoplay();
+    private boolean speechWarningShown;
+    private String pronunciationKey(){return current==null?"":current.optString("id")+"|"+MemoryData.date(System.currentTimeMillis());}
+    private final Runnable autoPronunciation=this::pronounceVisibleCard;
+    private void pronounceVisibleCard(){
+        boolean visible=motionResumed&&!graded&&activeStudyCard!=null
+                &&activeStudyCard.isShown()&&hasWindowFocus()&&("home".equals(page)||"review".equals(page));
+        String word=cardAutoplay.take(pronunciationKey(),visible);
+        if(!word.isEmpty()){
+            int status=Speech.speak(this,word,false);
+            if(status!=Speech.OK&&!speechWarningShown){speechWarningShown=true;speechError(status);}
+        }
+    }
+    private void schedulePronunciation(){handler.removeCallbacks(autoPronunciation);if(motionResumed)handler.post(autoPronunciation);}
+    private void stopPronunciation(){handler.removeCallbacks(autoPronunciation);Speech.stop();}
+    @Override public void onWindowFocusChanged(boolean focus){super.onWindowFocusChanged(focus);if(focus)schedulePronunciation();else stopPronunciation();}
     private final java.util.ArrayList<Runnable> deferredUi=new java.util.ArrayList<>();
     private void imageActive(boolean active){
         if(editorImage!=null)editorImage.setPageActive(active);
@@ -74,7 +90,7 @@ public class MemoryActivity extends ThemedActivity {
     private int statsPeriod,statsSubject,cardOffset;
     private MemoryCardQuery.Filter cardFilter=MemoryCardQuery.Filter.ALL;
     private String cardSearch="";
-    private void cancelBrowse(){browseEntry++;browseGeneration++;browseWorker.getQueue().clear();}
+    private void cancelBrowse(){stopPronunciation();cardAutoplay.clear();browseEntry++;browseGeneration++;browseWorker.getQueue().clear();}
     private <R> void readMemory(java.util.concurrent.Callable<R> work,java.util.function.Consumer<R> ready){
         if(isFinishing()||isDestroyed()||browseWorker.isShutdown())return;
         final long generation=++browseGeneration;
@@ -118,6 +134,7 @@ public class MemoryActivity extends ThemedActivity {
         if (deck == null) deck = "";
         if (saved == null && !deck.isEmpty()) page = "review";
         if (saved != null) {
+            cardAutoplay.markSpoken(saved.getString("pronounced_card",""));
             restoredStudyId=saved.getString("studyId","");restoredStudyDate=saved.getString("studyDate","");
             restoredRevealed=saved.getBoolean("studyRevealed",false);restoredTyped=saved.getString("studyTyped","");
             restoredGraded=saved.getBoolean("studyGraded",false);restoredGradedAt=saved.getLong("studyGradedAt",0);
@@ -138,6 +155,7 @@ public class MemoryActivity extends ThemedActivity {
         } catch (RuntimeException e) { errorPage(e); }
     }
     protected void onSaveInstanceState(Bundle out) {
+        out.putString("pronounced_card",cardAutoplay.saved());
         if ("editor".equals(page)) collectDraft();
         out.putBoolean("managementMode",managementMode);
         if(current!=null&&(!graded||!submitting)&&("home".equals(page)||"review".equals(page))){
@@ -151,7 +169,7 @@ public class MemoryActivity extends ThemedActivity {
         out.putInt("authorFormat", authorFormat); out.putInt("authorType", authorType); out.putString("authorSubject", authorSubject);
         if (draft != null) out.putString("draft", draft.toString()); super.onSaveInstanceState(out);
     }
-    protected void onPause() { if(activeStudyCard!=null)activeStudyCard.stopFeedback();motionResumed=false;imageActive(false);if(workProgress!=null)workProgress.hide();super.onPause(); handler.removeCallbacks(queueTick); }
+    protected void onPause() { stopPronunciation();if(activeStudyCard!=null)activeStudyCard.stopFeedback();motionResumed=false;imageActive(false);if(workProgress!=null)workProgress.hide();super.onPause(); handler.removeCallbacks(queueTick); }
     @Override protected void onNewIntent(Intent intent){super.onNewIntent(intent);
         if("editor".equals(page)&&(intent.getBooleanExtra("from_bottom_nav",false)||intent.getBooleanExtra("open_learning",false))){ThemeStore.dialog(this).setTitle(T.s("离开卡片编辑？")).setMessage(T.s("尚未保存的修改会被放弃。")).setNegativeButton(T.s("继续编辑"),null).setPositiveButton(T.s("放弃并进入记忆"),(d,w)->{setIntent(intent);resetPageScroll();managementMode=false;home();}).show();return;}setIntent(intent);
         if(intent.getBooleanExtra("from_bottom_nav",false)||intent.getBooleanExtra("open_learning",false)){
@@ -176,9 +194,10 @@ public class MemoryActivity extends ThemedActivity {
         if (submitting) { submitting = false; advance(); return; }
         if ("home".equals(page) && (!flashDate.equals(MemoryData.date(System.currentTimeMillis()))||(!revealed&&!graded&&homeRevision!=MemoryStore.revision()))) { home(); return; }
         if (("review".equals(page)||"home".equals(page)) && current == null) queueTick.run();
+        schedulePronunciation();
     }
     public void onBackPressed() {
-        if ("home".equals(page)) { super.onBackPressed(); return; }
+        if ("home".equals(page)) { if (BackToHome.open(this)) return; super.onBackPressed(); return; }
         if ("editor".equals(page)) {
             ThemeStore.dialog(this).setTitle(T.s("放弃本次编辑？"))
                 .setNegativeButton(T.s("继续编辑"), null).setPositiveButton(T.s("放弃"), (d, w) -> home()).show();
@@ -432,7 +451,8 @@ public class MemoryActivity extends ThemedActivity {
         LinearLayout head=ui.card();body.addView(head,ui.gap(12));
         text(head,T.s("现在的位置"),18);
         hint(head,T.f("卡片 %d 张 · 已学 %d 张 · 今天到期 %d 张",sum.total,sum.learned,sum.dueToday));
-        hint(head,T.f("今日评分 %d 次 · 连续 %d 天",sum.reviewedToday,sum.streak));
+        hint(head,T.f("累计学习 %d 天 · 连续 %d 天 · %s",sum.activeDays,sum.streak,
+                sum.reviewedToday>0?T.s("今天已学习"):T.s("今天未学习")));
         hint(head,T.f("近 7 天记住率 %.0f%%（%d 次评分里记住 %d 次）",sum.accuracy7()*100,sum.reviews7,sum.correct7));
         MemoryStats.PeriodSeries series=data.series;
         double[] bars=new double[series.reviews.length],line=new double[bars.length];int reviews=0,unique=0;
@@ -511,10 +531,13 @@ public class MemoryActivity extends ThemedActivity {
         hint(loadBox,T.f("入队 %d / 上限 %d · 新学上限 %d · 所选学科到期 %d",load.queued,load.count,load.newLimit,load.backlog));
         if(!load.sessionExists)hint(loadBox,T.s("今日队列尚未生成；进入记忆学习时再生成。"));
         MemoryFlashcards.Progress flash = MemoryFlashcards.progress(m, System.currentTimeMillis());
+        MemoryStats.Summary summary = MemoryStats.summary(m, System.currentTimeMillis());
         button(body, T.s("抽取设置  ·  按遗忘曲线  ·  ") + MemoryFlashcards.count(m) + T.s(" 张/天")
                 + T.s(" ·  新学 ") + MemoryFlashcards.newLimit(m), false, v -> flashSettings());
         button(body, T.s("记忆统计  ·  曲线"), false, v -> stats());
-        hint(body, T.s("本日已复习 ") + flash.done + "/" + flash.total + T.s(" · 今日累计 ") + flash.reviewedToday + T.s(" 张。")
+        hint(body, T.f("本日复习队列 %d/%d · %s",flash.done,flash.total,
+                summary.reviewedToday > 0 ? T.s("今天已学习") : T.s("今天未学习"))
+                + T.f("\n累计学习 %d 天 · 连续 %d 天。",summary.activeDays,summary.streak)
                 + T.s("\n到期旧卡按遗忘风险排序，新卡按新学上限补位。")
                 + T.s("\n显示答案后，点认识、模糊或忘记。未学稳的卡会在今日继续巩固，滑动与点卡片不评分。"));
         button(body, T.s("＋ 添加学科"), false, v -> addDeck());
@@ -1002,6 +1025,7 @@ public class MemoryActivity extends ThemedActivity {
             if(restoredGraded){graded=true;gradedAt=restoredGradedAt;submitting=false;committedAnswer.run();}
         }
         restoredStudyId="";restoredStudyDate="";restoredTyped="";restoredRevealed=false;restoredGraded=false;restoredGradedAt=0;
+        cardAutoplay.show(pronunciationKey(),spoken);schedulePronunciation();
     }
     private TextView studyText(LinearLayout parent,String value,int size,String tag){
         TextView view=text(parent,value,size);SwissTypography.role(view,SwissTypography.Role.KEEP);
@@ -1035,7 +1059,7 @@ public class MemoryActivity extends ThemedActivity {
         states.addState(new int[]{},ui.round(0x1420232A,24));button.setBackground(states);button.setFocusable(true);
         LineIcon icon=new LineIcon(this,"🔊",CardPalette.ink(CardPalette.MEMORY));
         button.addView(icon,new android.widget.FrameLayout.LayoutParams(ui.dp(24),ui.dp(24),Gravity.CENTER));
-        button.setContentDescription(T.s("美音朗读"));button.setOnClickListener(v->pronounce(word,false));
+        button.setContentDescription(T.s("美音朗读"));button.setOnClickListener(v->{if(motionResumed&&v.isShown())pronounce(word,false);});
         button.setAccessibilityDelegate(new View.AccessibilityDelegate(){
             @Override public void onInitializeAccessibilityNodeInfo(View view,android.view.accessibility.AccessibilityNodeInfo info){super.onInitializeAccessibilityNodeInfo(view,info);info.setClassName(android.widget.Button.class.getName());}
         });return button;
@@ -1043,7 +1067,10 @@ public class MemoryActivity extends ThemedActivity {
 
     /** 朗读：口音缺语音包或没有引擎时明说，不静默失败。 */
     private void pronounce(String word, boolean uk) {
-        int r = Speech.speak(this, word, uk);
+        stopPronunciation();cardAutoplay.markSpoken(pronunciationKey());
+        speechError(Speech.speak(this,word,uk));
+    }
+    private void speechError(int r){
         if (r == Speech.NO_VOICE) toast(T.s("系统没有这个口音的语音包"));
         else if (r == Speech.NO_ENGINE) toast(T.s("系统没有可用的语音引擎"));
     }
@@ -1076,6 +1103,7 @@ public class MemoryActivity extends ThemedActivity {
             LearningLink.Progress before = LearningLink.memory(this);
             if (flashMode) { MemoryStore.rateFlashcard(this, id, rating, flashDate); syncGuard(); }
             else { boolean credited = MemoryStore.rate(this, id, rating); if (credited) toast(T.s("有效复习 +1，进度已保存")); syncGuard(); }
+            stopPronunciation();
             graded=true;
             gradedAt=MemoryStore.cardLast(this,id);
             LearningLink.Progress after = LearningLink.memory(this);
@@ -1083,6 +1111,7 @@ public class MemoryActivity extends ThemedActivity {
                 Intent completed = new Intent(this, CheckinActivity.class);
                 completed.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
                 completed.putExtra(CheckinActivity.EXTRA_LEARNING_COMPLETE, "memory");
+                motionResumed=false;
                 startActivity(completed);
                 overridePendingTransition(0, 0);
             }
@@ -1093,6 +1122,7 @@ public class MemoryActivity extends ThemedActivity {
         submitting = false;
         // A stale delayed advance must never pull the user out of a page they opened meanwhile.
         if (!"home".equals(page) && !"review".equals(page)) return;
+        stopPronunciation();cardAutoplay.advance();
         if (flashMode) home(); else review();
     }
     private void authorDialog() {

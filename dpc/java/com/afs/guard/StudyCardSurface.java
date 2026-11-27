@@ -55,5 +55,5 @@ final class StudyCardSurface extends LinearLayout {
     @Override protected void onDetachedFromWindow(){stopFeedback();MotionPolicy.remove(policyChanged);super.onDetachedFromWindow();}
     @Override protected void onVisibilityChanged(android.view.View changed,int visibility){super.onVisibilityChanged(changed,visibility);if(visibility!=VISIBLE)stopFeedback();}
     @Override protected void onWindowVisibilityChanged(int visibility){super.onWindowVisibilityChanged(visibility);if(visibility!=VISIBLE)stopFeedback();}
-    static GradientDrawable background(Ui ui,int color,int stroke){GradientDrawable value=ui.round(color,22);value.setStroke(ui.dp(1),stroke);return value;}
+    static GradientDrawable background(Ui ui,int color,int stroke){GradientDrawable value=ui.round(color,22);value.setStroke(ui.dp(StyleMood.stroke(ui.style(),1f)),stroke);return value;}
 }

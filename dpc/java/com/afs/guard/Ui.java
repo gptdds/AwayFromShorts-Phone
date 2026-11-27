@@ -62,13 +62,28 @@ public final class Ui {
     public final boolean dark;
     public final AppearancePalette palette;
     public final boolean amap;
+    /** 当前界面风格；颜色和形状按它换算，页面结构仍由各页面自己决定。 */
+    private final String mood;
 
     public Ui(Context c) {
         this.ctx = c;
+        this.mood = StyleMood.of(com.afs.guard.style.StyleManager.selected(c));
         this.dark = isDark(c);
         this.palette = ThemeStore.palette(c,dark);
         AppearanceConfig config=ThemeStore.load(c);
         this.amap = config.amap();
+    }
+
+    /** Bridge from the palette to the pluggable style API; business code reads Ui, not tokens. */
+    public com.afs.guard.style.DesignTokens tokens() {
+        return new com.afs.guard.style.DesignTokens(bg(),surface(),surface2(),line(),text(),text2(),text3(),
+                accent(),onAccent(),palette.selection,dark);
+    }
+
+    public com.afs.guard.style.MotionTokens motionTokens() {
+        boolean reduced = !MotionPolicy.enabled(ctx);
+        if(reduced)return new com.afs.guard.style.MotionTokens(0,0,0);
+        return new com.afs.guard.style.MotionTokens(90L,220L,280L);
     }
 
 
@@ -77,6 +92,8 @@ public final class Ui {
 
     /** 当前是否深色。auto 跟随系统（夜里深、白天浅）。 */
     public static boolean isDark(Context c) {
+        String style=com.afs.guard.style.StyleManager.selected(c);
+        if(StyleMood.glass(style)||StyleMood.spatial(style))return false;
         return ThemeStore.dark(c);
     }
 
@@ -100,39 +117,42 @@ public final class Ui {
     /* ==================== 颜色 ==================== */
 
     public int bg() {
-        return palette.bg;
+        return StyleMood.background(mood, palette.bg, dark);
     }
 
+    /** 当前界面风格的稳定 id，供需要按风格单独画形状的页面使用。 */
+    public String style() { return mood; }
+
     public int surface() {
-        return palette.surface;
+        return StyleMood.surface(mood, palette.surface, dark);
     }
 
     /** 比卡片再亮一档：卡片里再嵌一层（进度条底、内嵌行）时才用。 */
     public int surface2() {
-        return palette.surface2;
+        return StyleMood.surface2(mood, palette.surface2, dark);
     }
 
     public int line() {
-        return palette.line;
+        return StyleMood.line(mood, palette.line, dark);
     }
 
     public int text() {
-        return palette.text;
+        return StyleMood.text(mood, palette.text, dark);
     }
 
     public int text2() {
-        return palette.text2;
+        return StyleMood.text2(mood, palette.text2, dark);
     }
 
     public int text3() {
-        return palette.text3;
+        return StyleMood.blend(palette.text3, text2(), .55f);
     }
 
     /** 深色下用亮一点的蓝，浅色下用标准蓝，保证各自对比度。 */
     public int accent() {
-        return palette.accent;
+        return StyleMood.accent(mood, palette.accent);
     }
-    public int onAccent(){return palette.onAccent;}
+    public int onAccent(){return "paper".equals(mood)?palette.onAccent:StyleMood.fluid(mood)?0xFF6D4128:0xFFFFFFFF;}
 
     public int green() {
         return dark ? 0xFF3DDC84 : 0xFF12A150;
@@ -161,12 +181,18 @@ public final class Ui {
     /* ==================== 构件 ==================== */
 
     public GradientDrawable round(int color, float radiusDp) {
-        GradientDrawable g = new GradientDrawable();
+        boolean material = !"paper".equals(mood) && color == surface() && radiusDp >= 10;
+        GradientDrawable g = material
+                ? new ReferenceMaterial(mood,color,dp(StyleMood.cardRadius(mood,radiusDp)),
+                        ctx.getResources().getDisplayMetrics().density)
+                : new GradientDrawable();
         g.setShape(GradientDrawable.RECTANGLE);
-        g.setColor(color);
-        float radius=amap&&radiusDp>=10&&radiusDp<90?Math.min(radiusDp,16):radiusDp;
+        if (!material) g.setColor(color);
+        float radius=radiusDp>=10&&radiusDp<90?StyleMood.cardRadius(mood,radiusDp):radiusDp;
         g.setCornerRadius(dp(radius));
         if(amap&&color==surface()&&radiusDp>=16)g.setStroke(Math.max(1,dp(.5f)),line());
+        if("fluidgradient".equals(mood)&&color==surface()&&radiusDp>=16)
+            g.setStroke(Math.max(1,dp(1.2f)),StyleMood.blend(accent(),green(),.35f));
         return g;
     }
 
@@ -189,17 +215,24 @@ public final class Ui {
 
     /** 一张标准悬浮卡：22dp 圆角、18dp 内边距和极轻的轮廓与阴影。 */
     public LinearLayout card() {
-        return card(22f, 18f);
+        return card(12f, 16f);
     }
 
     public LinearLayout card(float radiusDp, float padDp) {
         LinearLayout box = new LinearLayout(ctx);
+        box.setTag(R.id.visual_card, Boolean.TRUE);
         box.setOrientation(LinearLayout.VERTICAL);
         int edge = amap ? line() : mix(line(), surface(), dark ? .28f : .48f);
-        box.setBackground(round(surface(), radiusDp, edge, amap ? .5f : .7f));
+        float stroke = StyleMood.stroke(mood, amap ? .5f : .7f);
+        if (StyleMood.flat(mood)) {
+            box.setBackground(round(surface(), radiusDp,
+                    StyleMood.blend(line(), accent(), dark ? .22f : .16f), Math.max(1f, stroke)));
+        } else {
+            box.setBackground(round(surface(), radiusDp, edge, stroke));
+        }
         int p = dp(padDp);
         box.setPadding(p, p, p, p);
-        box.setElevation(dp(amap ? 1 : 2));
+        box.setElevation(0);
         box.setOutlineProvider(ViewOutlineProvider.BACKGROUND);
         return box;
     }
@@ -209,12 +242,9 @@ public final class Ui {
      * 每个页面只创建一个小型渐变 drawable，不增加常驻动画或模糊开销。
      */
     public void page(View view){
-        if(amap){view.setBackground(AmapStyle.page(this));return;}
-        int edgeA=mix(bg(), accent(), dark ? .055f : .045f);
-        int edgeB=mix(bg(), dark ? 0xFF171A20 : 0xFFF8F5EF, .10f);
-        GradientDrawable g=new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{edgeA,bg(),edgeB});
-        view.setBackground(g);
+        view.setTag(R.id.visual_page,Boolean.TRUE);
+        view.setBackgroundColor(bg());
+        StyleSurface.apply(view,this,mood);
     }
 
     /** 卡片之间统一留 10dp，看起来才像一组。 */
@@ -252,23 +282,7 @@ public final class Ui {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
-        if(amap){row.addView(new AmapStyle.Icon(ctx,name,text()),new LinearLayout.LayoutParams(dp(24),dp(24)));}
-        else if(LineIcon.known(glyph)){
-            // 章节标记也走矢量图标：图形统一，眉题那一行才整得起来
-            LineIcon icon = new LineIcon(ctx, glyph, 0xFFFFFFFF);
-            icon.setPadding(dp(5), dp(5), dp(5), dp(5));
-            icon.setBackground(round(glyphBg, 7f));
-            row.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
-        }
-        else {
-        TextView icon = new TextView(ctx);
-        icon.setText(glyph);
-        icon.setTextSize(11);
-        icon.setTextColor(0xFFFFFFFF);
-        icon.setGravity(Gravity.CENTER);
-        icon.setBackground(round(glyphBg, 7f));
-        row.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
-        }
+        row.addView(new AmapStyle.Icon(ctx,name,text2()),new LinearLayout.LayoutParams(dp(24),dp(24)));
 
         TextView t = new TextView(ctx);
         t.setText(name);
@@ -316,53 +330,55 @@ public final class Ui {
                              View.OnClickListener onClick) {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setGravity(Gravity.START);
-        box.setBackground(round(surface(), 22f, mix(line(),surface(),.42f), .7f));
-        int p = dp(16);
-        box.setPadding(p, p, p, dp(14));
-        box.setMinimumHeight(dp(104));
-        box.setElevation(dp(2));
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        boolean spatial = StyleMood.spatial(mood);
+        int tileColor = circleColor == TILE_TEAL || circleColor == TILE_GREEN
+                ? 0xFFFFDA00 : circleColor == TILE_BLUE ? 0xFF08C8F4 : surface();
+        int tileText = spatial && tileColor != surface() ? 0xFF241044 : text();
+        int p = dp(6);
+        box.setPadding(p, p, p, p);
+        box.setMinimumHeight(dp(96));
+        box.setElevation(0);
         box.setOutlineProvider(ViewOutlineProvider.BACKGROUND);
         if (onClick != null) {
             box.setOnClickListener(onClick);
+            TypedValue ripple=new TypedValue();
+            if(ctx.getTheme().resolveAttribute(android.R.attr.selectableItemBackground,ripple,true))
+                box.setForeground(ctx.getDrawable(ripple.resourceId));
+            box.setClipToOutline(!spatial);
         }
 
         LinearLayout iconWrap = new LinearLayout(ctx);
         iconWrap.setGravity(Gravity.CENTER);
-        iconWrap.setBackground(round(soft(accent(), .86f), 13f));
-        if(amap)iconWrap.addView(new AmapStyle.Icon(ctx,label,accent()),new LinearLayout.LayoutParams(dp(22),dp(22)));
-        else if(LineIcon.known(glyph))iconWrap.addView(new LineIcon(ctx,glyph,accent()),new LinearLayout.LayoutParams(dp(21),dp(21)));
-        else {
-            TextView glyphView=new TextView(ctx);
-            glyphView.setText(glyph);
-            glyphView.setTextSize(16);
-            glyphView.setTextColor(accent());
-            glyphView.setGravity(Gravity.CENTER);
-            ThemeStore.excludeFont(glyphView);
-            iconWrap.addView(glyphView,new LinearLayout.LayoutParams(dp(22),dp(22)));
-        }
-        box.addView(iconWrap,new LinearLayout.LayoutParams(dp(38),dp(38)));
+        boolean sculpted = !"paper".equals(mood);
+        if(sculpted)iconWrap.setBackground(new ReferenceMaterial(mood,
+                spatial?(circleColor==TILE_TEAL?0xFFFFDD43:circleColor==TILE_PURPLE?0xFF50DDED:circleColor==TILE_RUST?0xFFFFF3CD:circleColor==TILE_BLUE?0xFFFF9D72:0xFF6BE4BA):StyleMood.fluid(mood)?0xFFFFDFA0:surface(),dp(17),
+                ctx.getResources().getDisplayMetrics().density));
+        iconWrap.addView(new AmapStyle.Icon(ctx,label,text()),
+                new LinearLayout.LayoutParams(dp(sculpted?36:24),dp(sculpted?36:24)));
+        box.addView(iconWrap,new LinearLayout.LayoutParams(dp(sculpted?56:32),dp(sculpted?56:32)));
 
         TextView t = new TextView(ctx);
         t.setText(label);
-        t.setTextSize(14);
+        t.setTextSize(12);
         t.setTextColor(text());
-        t.setGravity(Gravity.START);
-        t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        t.setGravity(Gravity.CENTER);
+        t.setTypeface(Typeface.create("paper".equals(mood)?"sans-serif-medium":"sans-serif",
+                "paper".equals(mood)?Typeface.NORMAL:Typeface.BOLD));
         t.setMaxLines(1);
         t.setEllipsize(android.text.TextUtils.TruncateAt.END);
         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        tlp.topMargin = dp(14);
+        tlp.topMargin = dp(12);
         box.addView(t, tlp);
 
-        if (hint != null) {
+        if (hint != null && "paper".equals(mood)) {
             TextView h = new TextView(ctx);
             h.setText(hint);
             h.setTextSize(11);
-            h.setTextColor(text3());
+            h.setTextColor(spatial && tileColor != surface() ? 0xFF44235F : text2());
             h.setGravity(Gravity.START);
-            h.setMaxLines(1);
+            h.setMaxLines(2);
             // 英文比中文长，超出宽度时静默裁掉会留下「Cards · rewards ·」这种断尾。
             // 显示省略号至少说明「还有内容」，不至于看起来像 bug。
             h.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -378,7 +394,7 @@ public final class Ui {
         tv.setTextSize(11);
         tv.setTextColor(fg);
         tv.setGravity(Gravity.CENTER);
-        tv.setBackground(round(fill, 99f));
+        tv.setBackground(round(soft(fg,.94f), 6f));
         tv.setMinHeight(dp(28));
         tv.setPadding(dp(12), dp(5), dp(12), dp(5));
         return tv;
@@ -405,7 +421,7 @@ public final class Ui {
         box.setOrientation(LinearLayout.HORIZONTAL);
         box.setGravity(Gravity.CENTER);
         box.setBackground(round(fill, 16f, mix(line(),fill,.42f), .7f));
-        box.setElevation(dp(2));
+        box.setElevation(0);
         box.setOutlineProvider(ViewOutlineProvider.BACKGROUND);
         box.addView(new GearIcon(ctx, fg), new LinearLayout.LayoutParams(dp(19), dp(19)));
         box.setContentDescription(T.s("设置"));

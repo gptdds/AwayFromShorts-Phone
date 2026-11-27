@@ -28,6 +28,9 @@
 
     <queries>
         <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
@@ -57,12 +60,15 @@
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity android:name=".RestReminderActivity" android:exported="false" android:theme="@style/RestReminderTheme" android:excludeFromRecents="true" android:launchMode="singleTask" android:taskAffinity="com.afs.guard.reminder" />
+        <activity android:name=".AlertPopupActivity" android:exported="false" android:theme="@style/AlertPopupTheme" android:excludeFromRecents="true" android:launchMode="singleTop" android:taskAffinity="com.afs.guard.alert" android:showOnLockScreen="true" android:turnScreenOn="true" />
         <activity android:name=".DataManagementActivity" android:exported="false" android:theme="@style/NavTheme" />
+        <activity android:name=".DiagnosticsActivity" android:exported="false" android:theme="@style/NavTheme" />
+        <activity android:name=".RuleBackupActivity" android:exported="false" android:theme="@style/NavTheme" />
         <activity android:name=".DailyQuotaActivity" android:exported="false" android:theme="@style/NavTheme" android:windowSoftInputMode="adjustResize" android:label="每日限额" />
         <activity android:name=".QuotaBlockedActivity" android:exported="false" android:theme="@style/NavTheme" android:excludeFromRecents="true" android:launchMode="singleTop" android:label="额度用尽" />
 
         <activity
-            android:name=".MainActivity"
+            android:name=".CheckinActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/StartupTheme">
@@ -71,6 +77,8 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity android:name=".MainActivity" android:exported="false" android:theme="@style/NavTheme" />
 
         <activity
             android:name=".CardManagementActivity"
@@ -139,6 +147,13 @@
             android:windowSoftInputMode="adjustResize" />
 
         <activity
+            android:name=".TodoActivity"
+            android:theme="@style/NavTheme"
+            android:exported="false"
+            android:label="待办卡"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
             android:name=".ToolboxActivity"
             android:theme="@style/NavTheme"
             android:exported="false"
@@ -150,13 +165,6 @@
             android:theme="@style/NavTheme"
             android:exported="false"
             android:label="记忆学习"
-            android:windowSoftInputMode="adjustResize" />
-
-        <activity
-            android:name=".CheckinActivity"
-            android:theme="@style/NavTheme"
-            android:exported="false"
-            android:label="@string/checkin_title"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
@@ -253,12 +261,26 @@
 
         <activity android:name=".MemoSketchActivity" android:exported="false" android:label="涂鸦" />
         <provider android:name=".MemoFileProvider" android:authorities="com.afs.guard.memo.files" android:exported="false" android:grantUriPermissions="true" />
+        <provider android:name=".LovePhotoProvider" android:authorities="com.afs.guard.love.files" android:exported="false" android:grantUriPermissions="true" />
         <receiver android:name=".MemoReminderReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".TodoReminderReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+            </intent-filter>
+        </receiver>
+        <receiver android:name=".AlertDismissReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.afs.guard.ALERT_DISMISSED" />
             </intent-filter>
         </receiver>
         <receiver
@@ -274,6 +296,7 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                 <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>

@@ -24,6 +24,7 @@ public final class MemoTextFormat {
     private static final Pattern LIST=Pattern.compile("^(?:[-*+] |[0-9]{1,9}[.)] )");
     /** 有序列表项：缩进 + 序号 + 分隔符(. 或 )) + 内容（内容可能还是空的）。 */
     private static final Pattern ORDERED=Pattern.compile("^([ \\t]*)([0-9]{1,9})([.)])(?:[ \\t]+(.*))?$");
+    private static final Pattern HR=Pattern.compile("^(?:-{3,}|\\*{3,}|_{3,})$");
     public static final class Change {
         public final String body;
         public final int cursor;
@@ -56,6 +57,20 @@ public final class MemoTextFormat {
         for(Line line:lines(body))if(line.code&&(start==end?start>=line.start&&start<=line.end:start<line.end&&end>line.start))return true;return false;
     }
     private static int indentEnd(String line){int i=0;while(i<line.length()&&(line.charAt(i)==' '||line.charAt(i)=='\t'))i++;return i;}
+    /** Remove paragraph prefixes in any stacked order, leaving visible content intact. */
+    private static int paragraphMarkerEnd(String text,int indentation){
+        int end=indentation;
+        while(end<text.length()){
+            String remainder=text.substring(end);
+            Matcher heading=HEADING.matcher(remainder);
+            if(heading.find()){end+=heading.end();continue;}
+            if(remainder.startsWith("> ")){end+=2;continue;}
+            Matcher list=LIST.matcher(remainder);
+            if(list.find()){end+=list.end();continue;}
+            break;
+        }
+        return end;
+    }
     private static Change changed(String original,String body,int cursor,int oldFocus){return body.length()>MAX_BODY?new Change(original,oldFocus):new Change(body,cursor);}
     /** level=0 restores normal paragraph; completed tasks are never converted to headings. */
     public static Change heading(String body,int anchor,int focus,int level){
@@ -105,6 +120,88 @@ public final class MemoTextFormat {
         int insert=at+1;
         return new Change(body.substring(0,insert)+prefix+body.substring(insert),insert+prefix.length());
     }
+    /**
+     * Repair numbering after an edit removes a list item or part of an ordered line.
+     * Fenced code, bullets and task lines are left untouched. Indentation and the
+     * original "." or ")" delimiter are retained.
+     */
+    public static Change renumberAfterDeletion(String before,String body,int editStart,int removedCount,int cursor){
+        if(removedCount<=0||before==null||body==null)return null;
+        int editEnd=Math.min(before.length(),Math.max(editStart,0)+removedCount);
+        boolean affected=false;
+        for(Line line:lines(before)){
+            if(line.code)continue;
+            String text=before.substring(line.start,line.end);
+            if(ORDERED.matcher(text).matches()
+                    &&editStart<=line.end&&editEnd>=line.start)affected=true;
+        }
+        return affected?renumberOrdered(body,cursor):null;
+    }
+    private static final class NumberFrame {
+        final int indent;char delimiter;int next;
+        NumberFrame(int indent,char delimiter){this.indent=indent;this.delimiter=delimiter;next=1;}
+    }
+    private static final class PrefixEdit {
+        final int start,end;final String replacement;
+        PrefixEdit(int start,int end,String replacement){this.start=start;this.end=end;this.replacement=replacement;}
+    }
+    private static int indentColumn(String text){
+        int column=0;
+        for(int i=0;i<text.length();i++){
+            char ch=text.charAt(i);
+            if(ch==' ')column++;
+            else if(ch=='\t')column+=4-(column%4);
+            else break;
+        }
+        return column;
+    }
+    private static Change renumberOrdered(String body,int cursor){
+        List<NumberFrame> frames=new ArrayList<>();
+        List<PrefixEdit> edits=new ArrayList<>();
+        for(Line line:lines(body)){
+            String text=body.substring(line.start,line.end);
+            if(line.code){
+                frames.clear();
+                continue;
+            }
+            int indentation=indentEnd(text);
+            Matcher ordered=ORDERED.matcher(text.substring(indentation));
+            if(ordered.matches()){
+                int column=indentColumn(text);
+                while(!frames.isEmpty()&&frames.get(frames.size()-1).indent>column)frames.remove(frames.size()-1);
+                NumberFrame frame=frames.isEmpty()?null:frames.get(frames.size()-1);
+                char delimiter=ordered.group(3).charAt(0);
+                if(frame==null||frame.indent<column){
+                    frame=new NumberFrame(column,delimiter);
+                    frames.add(frame);
+                }else if(frame.indent==column){
+                    if(frame.delimiter==delimiter)frame.next++;
+                    else{frame.delimiter=delimiter;frame.next=1;}
+                }
+                String value=ordered.group(0);
+                int digits=ordered.group(2).length();
+                int contentAt=ordered.start(4);
+                int prefixEnd=indentation+(contentAt<0?value.length():contentAt);
+                String spacing=text.substring(indentation+digits+1,prefixEnd);
+                String prefix=text.substring(0,indentation)+frame.next+delimiter+spacing;
+                if(!prefix.equals(text.substring(0,prefixEnd)))
+                    edits.add(new PrefixEdit(line.start,line.start+prefixEnd,prefix));
+                continue;
+            }
+            if(text.trim().isEmpty()||indentation==0)frames.clear();
+        }
+        if(edits.isEmpty())return null;
+        StringBuilder out=new StringBuilder(body);
+        int moved=cursor;
+        for(int i=edits.size()-1;i>=0;i--){
+            PrefixEdit edit=edits.get(i);
+            out.replace(edit.start,edit.end,edit.replacement);
+            int delta=edit.replacement.length()-(edit.end-edit.start);
+            if(moved>=edit.end)moved+=delta;
+            else if(moved>edit.start)moved=edit.start+edit.replacement.length();
+        }
+        return new Change(out.toString(),moved);
+    }
     private static Change paragraphs(String body,int anchor,int focus,int operation,int argument){
         List<Line> chosen=selected(body,anchor,focus);StringBuilder out=new StringBuilder(body);int cursor=clamp(focus,body.length());
         int number=0;java.util.HashMap<Integer,Integer> numbers=new java.util.HashMap<>();
@@ -116,10 +213,10 @@ public final class MemoTextFormat {
                 else{if(indentation==0)continue;end=start+(text.startsWith("  ")?2:1);replacement="";}
             }else{
                 if(TASK.matcher(text).find())continue;start+=indentation;end=start;String remainder=text.substring(indentation);
-                Matcher h=HEADING.matcher(remainder);if(h.find())end+=h.end();
-                if(operation==0){if(argument==0&&remainder.startsWith("> "))end=start+2;replacement=argument==0?"":(argument==1?"# ":argument==2?"## ":"### ");}
+                if(operation==0){end=line.start+paragraphMarkerEnd(text,indentation);replacement=argument==0?"":(argument==1?"# ":argument==2?"## ":"### ");}
                 else if(operation==3){replacement=remainder.startsWith("> ")?"":"> ";if(remainder.startsWith("> "))end=start+2;}
                 else{
+                    Matcher h=HEADING.matcher(remainder);if(h.find())end+=h.end();
                     Matcher list=LIST.matcher(remainder.substring(end-start));if(list.find())end+=list.end();
                     replacement=argument==1?numbers.get(line.start)+". ":"- ";
                 }
@@ -170,8 +267,33 @@ public final class MemoTextFormat {
             if(h.find()){int start=line.start+indent+h.end();span(text,new Styled(Typeface.BOLD),start,line.end);span(text,new Sized(h.group(1).length()==1?1.5f:h.group(1).length()==2?1.3f:1.15f),start,line.end);span(text,new Ink(textColor),start,line.end);span(text,new Ink(mutedColor),line.start+indent,start);}
         }
     }
+    /** 上游渲染器只认 h1–h3 和无序列表；h4–h6、引用、分隔线、有序列表先转成等价 HTML。 */
+    /** 上游渲染器只认 h1-h3 和无序列表；h4-h6、引用、分隔线、有序列表先转成等价 HTML。 */
+    private static String previewBlocks(String escaped){
+        StringBuilder out=new StringBuilder();int previous=0;
+        for(Line line:lines(escaped)){
+            out.append(escaped,previous,line.start);previous=line.end;
+            String value=escaped.substring(line.start,line.end);
+            if(line.code){out.append(value);continue;}
+            Matcher h=HEADING.matcher(value);
+            if(h.find()&&h.group(1).length()>3)value="<big><b><font color='#000000'>"+value.substring(h.end())+"</font></b></big>";
+            if(value.startsWith("> ")){
+                value="<i><font color='#8A8F98'>"+value.substring(2)+"</font></i>";
+            }
+            if(HR.matcher(value).matches())value="─────";
+            Matcher ol=ORDERED.matcher(value);
+            if(ol.find())value=ol.group(1)+ol.group(2)+ol.group(3)+" "+(ol.group(4)==null?"":ol.group(4));
+            out.append(value);
+        }
+        return out.append(escaped.substring(previous)).toString();
+    }
     /** Apply to already HTML-escaped text before the Markor filter. Enables only exact safe underline/highlight pairs. */
     public static String previewExtras(String escaped){
+        return decorateLines(previewBlocks(escaped));
+    }
+
+    /** 逐行启用安全的下划线/高亮标记；块级转换已经做完，这里只处理行内。 */
+    private static String decorateLines(String escaped){
         StringBuilder out=new StringBuilder();int previous=0;
         for(Line line:lines(escaped)){
             out.append(escaped,previous,line.start);String value=escaped.substring(line.start,line.end);

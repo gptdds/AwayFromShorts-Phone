@@ -197,6 +197,8 @@ public final class NetBlockStore {
         int n = packages(c).size();
         if (n == 0) return T.s("还没选应用");
         if (proxyMode(c)) return T.f("%d 个应用 · 由代理负责拦截（本 App 不占 VPN）", n);
+        if (StudyGate.learningHoldForNetwork(c, GuardClock.now(c)))
+            return T.f("%d 个应用 · 学习联动生效，调整时段内也断网", n);
         if (NetWindow.inside(c)) return T.f("%d 个应用 · 调整时段 %s 内放开", n, NetWindow.label(c));
         if (running(c)) return T.f("%d 个应用断网中", n);
         if (!fallbackPackages(c).isEmpty()) return T.f("%d 个应用 · 已改用冻结（VPN 被占用）", n);

@@ -18,7 +18,11 @@ import com.afs.pluginapi.PrepareResult;
 public final class PluginEndpointService extends Service {
     private final IPluginEndpoint.Stub binder = new IPluginEndpoint.Stub() {
         @Override public boolean onTransact(int code,android.os.Parcel data,android.os.Parcel reply,int flags)throws RemoteException{
-            if(code!=IBinder.INTERFACE_TRANSACTION&&(data==null||data.dataSize()>PluginProtocol.MAX_TRANSACTION||!isHost(Binder.getCallingUid())))return false;
+            if(code!=IBinder.INTERFACE_TRANSACTION&&(data==null||data.dataSize()>PluginProtocol.MAX_TRANSACTION||!isHost(Binder.getCallingUid()))){
+                android.util.Log.w("AFSPlugin", "rejected host transaction uid=" + Binder.getCallingUid()
+                        + " testMode=" + BuildFlags.TEST_MODE);
+                return false;
+            }
             try{if(!com.afs.pluginapi.WireFrame.valid("com.afs.pluginapi.IPluginEndpoint",code,data))return false;return super.onTransact(code,data,reply,flags);}catch(RuntimeException malformed){return false;}
         }
         @Override public void preparePage(final PageLaunch launch, final IPrepareCallback callback) {

@@ -10,11 +10,20 @@ public final class LearningPolicyTest {
         if (!value) throw new AssertionError("Learning policy check " + checks);
     }
     public static void main(String[] args) {
+        check(StudyGate.anyLearningHold(true, false, true));
+        check(StudyGate.anyLearningHold(true, true, false));
+        check(!StudyGate.anyLearningHold(false, true, true));
+        check(!StudyGate.anyLearningHold(true, false, false));
         check(LearningPolicy.holds(true, true, 10, 9));
         check(!LearningPolicy.holds(true, true, 10, 10));
         check(!LearningPolicy.holds(true, false, 10, 0));
         check(!LearningPolicy.holds(false, true, 10, 0));
         check(!LearningPolicy.holds(true, true, 0, 0));
+        check(LearningPolicy.quotaHolds(true, true));
+        check(!LearningPolicy.quotaHolds(false, true));
+        check(!LearningPolicy.quotaHolds(true, false));
+        check(StudyGate.quotaLearningHold(true, true));
+        check(!StudyGate.quotaLearningHold(false, true));
         check(LearningPolicy.complete(true, 0, 0));
         check(!LearningPolicy.complete(false, 0, 0));
         Calendar sun = new GregorianCalendar(2026, Calendar.NOVEMBER, 1, 0, 0);
@@ -58,20 +67,21 @@ public final class LearningPolicyTest {
         check("当前无额外冻结".equals(beforeDue.reason) && beforeDue.elapsed.isEmpty());
         CardManagementActivity.LinkageSummary atDue =
                 CardManagementActivity.linkageSummary("学习联动：今日打卡还有 1 个目标", twenty, twenty);
-        check(atDue.reason.startsWith("学习联动") && atDue.elapsed.contains("0.0 分钟"));
+        check(atDue.reason.startsWith("学习联动") && atDue.elapsed.contains("0 秒")
+                && atDue.elapsed.contains("完成目标后解冻"));
         CardManagementActivity.LinkageSummary fiveMinutes =
                 CardManagementActivity.linkageSummary(atDue.reason, twenty, twenty + 5 * 60_000L);
-        check(fiveMinutes.elapsed.contains("5.0 分钟") && fiveMinutes.elapsed.contains("完成后解除"));
+        check(fiveMinutes.elapsed.contains("5 分") && fiveMinutes.elapsed.contains("完成目标后解冻"));
         CardManagementActivity.LinkageSummary completed =
                 CardManagementActivity.linkageSummary("", 0L, twenty + 5 * 60_000L);
         check("当前无额外冻结".equals(completed.reason) && completed.elapsed.isEmpty());
         long summaryDue = twenty + 30 * 60_000L;
         CardManagementActivity.LinkageSummary summary =
                 CardManagementActivity.linkageSummary("学习联动：每周总结尚未完成", summaryDue, summaryDue + 60_000L);
-        check(summary.elapsed.contains("1.0 分钟"));
+        check(summary.elapsed.contains("1 分"));
         CardManagementActivity.LinkageSummary overnight =
                 CardManagementActivity.linkageSummary(atDue.reason, twenty, twenty + 14 * 60 * 60_000L + 10 * 60_000L);
-        check(overnight.elapsed.contains("850.0 分钟"));
+        check(overnight.elapsed.contains("14 小时 10 分"));
         String scheduledEnded = StudyGate.learningActivityText(
                 "学习联动：今日打卡还有 1 个目标", true, false);
         check(scheduledEnded.contains("原冻结结束后继续冻结中"));

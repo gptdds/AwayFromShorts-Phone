@@ -42,10 +42,8 @@ public final class HostTrust {
             if (Build.VERSION.SDK_INT >= 28) {
                 PackageInfo info = pm.getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES);
                 SigningInfo signing = info.signingInfo;
-                if (signing == null) return null;
-                Signature[] signers = signing.hasMultipleSigners()
-                        ? signing.getApkContentsSigners()
-                        : signing.getSigningCertificateHistory();
+                if (signing == null || signing.hasMultipleSigners()) return null;
+                Signature[] signers = signing.getApkContentsSigners();
                 if (signers == null || signers.length != 1) return null;
                 return sha256(signers[0].toByteArray());
             }

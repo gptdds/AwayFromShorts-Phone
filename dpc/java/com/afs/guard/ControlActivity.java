@@ -51,6 +51,7 @@ public final class ControlActivity extends ThemedActivity {
 
     /** 设置页那行：一眼看出现在有几条规则真在生效。 */
     public static String summary(Context c) {
+        if (!MasterSwitch.enabled(c)) return T.s("总开关关闭");
         int n = 0;
         if (LockStore.anyOn(c)) n++;
         if (ReminderStore.on(c)) n++;
@@ -149,7 +150,15 @@ public final class ControlActivity extends ThemedActivity {
         tail.setEllipsize(android.text.TextUtils.TruncateAt.END);
         line.addView(tail);
 
-        if (onClick != null) line.setOnClickListener(v -> onClick.run());
+        if (onClick != null) line.setOnClickListener(v -> {
+            if (!DailyQuotaStore.editable(this)) {
+                android.widget.Toast.makeText(this,
+                        T.f("自律规则只在调整时段 %s 内可修改", TimeWindow.label(this)),
+                        android.widget.Toast.LENGTH_SHORT).show();
+                return;
+            }
+            onClick.run();
+        });
         parent.addView(line);
     }
 
@@ -171,17 +180,20 @@ public final class ControlActivity extends ThemedActivity {
         state.setTextColor(on ? ui.green() : ui.text3());
         line.addView(state);
 
-        line.setOnClickListener(v -> onClick.run());
+        line.setOnClickListener(v -> {
+            if (!DailyQuotaStore.editable(this)) {
+                android.widget.Toast.makeText(this,
+                        T.f("自律规则只在调整时段 %s 内可修改", TimeWindow.label(this)),
+                        android.widget.Toast.LENGTH_SHORT).show();
+                return;
+            }
+            onClick.run();
+        });
         parent.addView(line);
     }
 
+    /** 配置页不再展示解释性小字；调用点保留，便于日后按需恢复。 */
     private void note(LinearLayout parent, String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextSize(11);
-        view.setTextColor(ui.text3());
-        view.setPadding(0, ui.dp(2), 0, ui.dp(10));
-        parent.addView(view);
     }
 
     private void pick(String title, String[] labels, int checked, Pick onPick) {
@@ -311,8 +323,8 @@ public final class ControlActivity extends ThemedActivity {
                 "There is no notification fallback, so the background pop-up permission is required. Without it the system blocks the launch and that reminder never appears."));
         note(card, T.s("和上面的定时锁机是两回事：锁机是硬拦，这个是轻提醒，可以只开一个。"));
         note(card, Lang.t(this,
-                "把守卫从最近任务里划掉会让系统直接杀掉进程，提醒会停到系统下一次把它叫起来（最长约 5 分钟，到点的那条会补发）。建议在最近任务里锁定守卫，别划掉它。",
-                "Swiping the guard away from recents makes the system kill its process; reminders pause until it is woken again (up to about 5 minutes, missed ones are then delivered). Lock the guard in recents instead of swiping it away."));
+                "把守卫从最近任务里划掉会让系统直接杀掉进程，正弹着的提醒页面也会跟着消失，但这条提醒没有被打发走 —— 进程一被叫起来（最长约 5 分钟）弹窗会立刻回来。杀进程关不掉提醒，建议还是在最近任务里锁定守卫。",
+                "Swiping the guard away from recents makes the system kill its process, taking the reminder page with it — but the reminder is not dismissed: as soon as the process is woken again (within about 5 minutes) the page pops right back. Killing the app is not a way to close a reminder; lock the guard in recents instead."));
     }
 
     private void openReminderPermission() {

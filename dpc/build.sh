@@ -76,14 +76,16 @@ PLUGIN_TEST_MODE=false
 if [ "${AFS_RELEASE:-0}" = "1" ] && [ "${AFS_PLUGIN_TEST_MODE:-0}" = "1" ]; then
   echo "Release cannot enable plugin test trust" >&2; exit 1
 fi
-[ "${AFS_PLUGIN_TEST_MODE:-0}" = "1" ] && PLUGIN_TEST_MODE=true
+if [ "${AFS_PLUGIN_TEST_MODE:-0}" = "1" ]; then PLUGIN_TEST_MODE=true; fi
 PLUGIN_STATS_LEGACY=false
-[ "${AFS_STATS_LEGACY:-0}" = "1" ] && PLUGIN_STATS_LEGACY=true
+if [ "${AFS_STATS_LEGACY:-0}" = "1" ]; then PLUGIN_STATS_LEGACY=true; fi
+VERSION_NAME="${AFS_VERSION_NAME:-1.92.6}"
 mkdir -p "$OUT/gen/com/afs/guard"
 cat > "$OUT/gen/com/afs/guard/BuildConfig.java" <<EOF
 package com.afs.guard;
 public final class BuildConfig {
     public static final String PREFILL_TOKEN = "";
+    public static final String VERSION_NAME = "$VERSION_NAME";
     public static final boolean PLUGIN_TEST_MODE = $PLUGIN_TEST_MODE;
     public static final String PLUGIN_TRUST_SHA256 = "$PLUGIN_TRUST_SHA256";
     public static final boolean PLUGIN_STATS_LEGACY = $PLUGIN_STATS_LEGACY;
@@ -104,8 +106,8 @@ else
     "$AIDL" -I "$API_AIDL" -o "$OUT/aidlgens" "$f"
   done < <(find "$API_AIDL" -name '*.aidl' -print0)
 fi
-VERSION_CODE="${AFS_VERSION_CODE:-2313}"
-VERSION_NAME="${AFS_VERSION_NAME:-1.91.19}"
+VERSION_CODE="${AFS_VERSION_CODE:-2432}"
+VERSION_NAME="${AFS_VERSION_NAME:-1.92.6}"
 if [ "${AFS_RELEASE:-0}" = "1" ]; then
   : "${AFS_KEYSTORE:?Release requires an external signing keystore}"
   : "${AFS_STORE_PASS:?Release requires a private signing password}"
@@ -193,6 +195,13 @@ with zipfile.ZipFile(apk, "a", zipfile.ZIP_DEFLATED) as z:
             if arc in existing:
                 continue
             z.write(full, arc)
+    # Native compatibility builds share the same component programs as the Gradle styles.
+    for style, universe in (("liquidglass", "liquid-universe"), ("fluidgradient", "fluid-universe")):
+        rel = "visual/" + universe + "/native-components.agsl"
+        full = "../style/" + style + "/src/main/assets/" + rel
+        arc = "assets/" + rel
+        if os.path.isfile(full) and arc not in existing:
+            z.write(full, arc)
 PYEOF
 
 # ---------- 3. 编译 Java ----------
@@ -201,7 +210,12 @@ CP_SEP=";"
 case "$(uname -s)" in Linux|Darwin) CP_SEP=":" ;; esac
 COMPILE_ANDROID="$ANDROID_JAR"
 if command -v cygpath >/dev/null 2>&1; then COMPILE_ANDROID="$(cygpath -m "$ANDROID_JAR")"; fi
-find java "$OUT/gen" "$OUT/aidlgens" ../plugin-api/java -name '*.java' > "$OUT/sources.txt"
+# The native build consumes the same lightweight Java visual contracts as Gradle.
+# Compose sources and heavy scene engines are never part of this compatibility build.
+find java "$OUT/gen" "$OUT/aidlgens" ../plugin-api/java \
+  ../core/rules/src/main/java \
+  ../core/style-api/src/main/java ../style/fluidgradient/src/main/java ../style/liquidglass/src/main/java ../style/spatial3d/src/main/java \
+  -name '*.java' > "$OUT/sources.txt"
 # ★ javac 失败必须让构建死掉：以前管道接 grep || true, 编译错了构建照样走到
 #   打包, 装上的是"没有新代码"的旧 dex（PcStats 漏 import 就这么漏装过一次）。
 # --release supplies Java 8's LambdaMetafactory signatures; Android's boot stubs
@@ -209,12 +223,12 @@ find java "$OUT/gen" "$OUT/aidlgens" ../plugin-api/java -name '*.java' > "$OUT/s
 if ! javac -encoding UTF-8 -nowarn --release 8 \
   -classpath "$COMPILE_ANDROID${CP_SEP}libs/pdfbox-android-2.0.27.0.jar" \
   -d "$OUT/classes" @"$OUT/sources.txt" 2> "$OUT/javac.log"; then
-  grep -v '^warning:' "$OUT/javac.log" >&2 || true
+  grep -av '^warning:' "$OUT/javac.log" >&2 || true
   rm -rf "$OUT/classes"
   echo "javac 失败" >&2
   exit 1
 fi
-grep -v '^warning:' "$OUT/javac.log" || true
+grep -av '^warning:' "$OUT/javac.log" || true
 
 # ---------- 4. dex ----------
 echo "[4/7] d8"

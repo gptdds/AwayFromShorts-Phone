@@ -68,14 +68,14 @@ public final class MemoryFlashcards {
             d = new JSONObject(); MemoryData.put(d, "date", date); MemoryData.put(d, "seen", new JSONArray());
             MemoryData.put(r, "day", d); r.remove("session");
         }
+        if(d.optJSONArray("newSeen")==null) {
+            // Older daily ledgers did not distinguish newly learned items: count seen conservatively
+            // for this one day rather than allowing a settings reset to exceed the new-item cap.
+            MemoryData.put(d,"newSeen",new JSONArray(new ArrayList<>(strings(d.optJSONArray("seen")))));
+        }
         return d;
     }
-    private static long endOfDay(long now) {
-        Calendar end = Calendar.getInstance(); end.setTimeInMillis(now);
-        end.set(Calendar.HOUR_OF_DAY, 23); end.set(Calendar.MINUTE, 59);
-        end.set(Calendar.SECOND, 59); end.set(Calendar.MILLISECOND, 999);
-        return end.getTimeInMillis();
-    }
+    private static long endOfDay(long now) { return LearningRules.endOfDay(now); }
     private static Set<String> selected(MemoryData m) {
         Set<String> ids = new HashSet<>(); JSONArray a = subjects(m);
         for (int i = 0; i < a.length(); i++) ids.add(a.optString(i));
@@ -87,42 +87,20 @@ public final class MemoryFlashcards {
      * 学习步 / 重学步（state != REVIEW）没有按天的稳定度，到期是分钟级的，
      * 排序上给最小值 —— 刚忘掉的卡本来就该最先见到。
      */
+    private static List<JSONObject> selectedCards(MemoryData m) {
+        Set<String> decks=selected(m);List<JSONObject> out=new ArrayList<>();JSONArray cards=m.cards();
+        for(int i=0;i<cards.length();i++) {
+            JSONObject c=cards.optJSONObject(i);if(c==null)continue;
+            String deck=c.optString("deck");if(decks.contains(deck)&&!m.deleted(deck))out.add(c);
+        }
+        return out;
+    }
     static List<JSONObject> reviews(MemoryData m, long now) {
-        Set<String> decks = selected(m); long end = endOfDay(now);
-        List<JSONObject> out = new ArrayList<>();
-        JSONArray cards = m.cards();
-        for (int i = 0; i < cards.length(); i++) {
-            JSONObject c = cards.optJSONObject(i); if (c == null) continue;
-            String deck = c.optString("deck");
-            if (!decks.contains(deck) || m.deleted(deck)) continue;
-            if (c.optInt("reps") <= 0 || c.optLong("due") > end) continue;
-            out.add(c);
-        }
-        Collections.sort(out, new Comparator<JSONObject>() {
-            public int compare(JSONObject a, JSONObject b) {
-                double ra = risk(a, now), rb = risk(b, now);
-                if (ra != rb) return ra < rb ? -1 : 1;
-                return Long.compare(a.optLong("due"), b.optLong("due"));
-            }
-        });
-        return out;
+        return LearningRules.reviews(selectedCards(m),now);
     }
-    private static double risk(JSONObject c, long now) {
-        if (c.optInt("state", MemoryScheduler.LEARNING) != MemoryScheduler.REVIEW) return 0;
-        return MemoryScheduler.retrievability(c.optDouble("stability", 0), c.optLong("last", 0), now);
-    }
-    /** 新卡：从未学过，按入库顺序（cards 数组即导入顺序）。 */
+    /** 新卡按入库顺序补位，与刷题共用抽取核心。 */
     static List<JSONObject> fresh(MemoryData m, long now) {
-        Set<String> decks = selected(m); List<JSONObject> out = new ArrayList<>();
-        JSONArray cards = m.cards();
-        for (int i = 0; i < cards.length(); i++) {
-            JSONObject c = cards.optJSONObject(i); if (c == null) continue;
-            String deck = c.optString("deck");
-            if (!decks.contains(deck) || m.deleted(deck)) continue;
-            if (c.optInt("reps") > 0) continue;
-            out.add(c);
-        }
-        return out;
+        return LearningRules.fresh(selectedCards(m));
     }
     private static Set<String> strings(JSONArray a) {
         Set<String> out = new HashSet<>(); if (a != null) for (int i = 0; i < a.length(); i++) out.add(a.optString(i)); return out;
@@ -135,43 +113,21 @@ public final class MemoryFlashcards {
             // 空队列不冻结一整天：加了新卡、或有卡到期，就重排一次。
             if (reviews(m, now).isEmpty() && fresh(m, now).isEmpty()) return s;
         }
-        Set<String> seen = strings(day(m, now).optJSONArray("seen"));
-        int limit = count(m), freshLimit = newLimit(m);
-        List<String> ids = new ArrayList<>();
-        for (JSONObject c : reviews(m, now)) {
-            if (ids.size() >= limit) break;
-            String id = c.optString("id"); if (!finished(c, seen)) ids.add(id);
-        }
-        int room = Math.min(freshLimit, limit - ids.size());
-        if (room > 0) {
-            for (JSONObject c : fresh(m, now)) {
-                if (room <= 0) break;
-                String id = c.optString("id");
-                if (seen.contains(id)) continue;
-                ids.add(id); room--;
-            }
-        }
-        JSONArray chosen = new JSONArray(); for (String id : ids) chosen.put(id);
+        JSONObject today=day(m,now);
+        JSONArray chosen=LearningRules.choose(selectedCards(m),strings(today.optJSONArray("seen")),
+                strings(today.optJSONArray("newSeen")),count(m),newLimit(m),now);
         s = new JSONObject(); MemoryData.put(s, "date", MemoryData.date(now)); MemoryData.put(s, "ids", chosen);
         MemoryData.put(r, "session", s); return s;
     }
     public static JSONObject next(MemoryData m, long now) {
-        JSONArray ids = session(m, now).optJSONArray("ids"); Set<String> seen = strings(day(m, now).optJSONArray("seen"));
-        JSONObject first = null;
-        for (int i = 0; i < ids.length(); i++) {
-            JSONObject c = m.card(ids.optString(i));
-            if (c == null || m.deleted(c.optString("deck")) || finished(c, seen) || waiting(c, now)) continue;
-            // Due relearning takes priority; a future minute-step must never block fresh cards.
-            if (seen.contains(c.optString("id"))) return c;
-            if (first == null) first = c;
-        }
-        return first;
+        return LearningRules.next(selectedCards(m),session(m,now).optJSONArray("ids"),
+                strings(day(m,now).optJSONArray("seen")),now);
     }
     private static boolean finished(JSONObject c, Set<String> seen) {
-        return seen.contains(c.optString("id")) && c.optInt("state") == MemoryScheduler.REVIEW;
+        return LearningRules.finished(c,seen);
     }
     private static boolean waiting(JSONObject c, long now) {
-        return c.optInt("reps") > 0 && c.optInt("state") != MemoryScheduler.REVIEW && c.optLong("due") > now;
+        return LearningRules.waiting(c,now);
     }
     public static final class Load {
         public boolean sessionExists;
@@ -235,9 +191,11 @@ public final class MemoryFlashcards {
         JSONObject current = next(m, now);
         if (current == null || !id.equals(current.optString("id"))) throw new IllegalArgumentException(T.s("请按当前闪卡顺序复习"));
     }
-    public static void complete(MemoryData m, String id, long now) {
-        JSONArray seen = day(m, now).optJSONArray("seen");
+    public static void complete(MemoryData m, String id, long now,boolean wasNew) {
+        JSONObject today=day(m,now);JSONArray seen=today.optJSONArray("seen");
         if (!MemoryData.contains(seen, id)) seen.put(id);
+        JSONArray newSeen=today.optJSONArray("newSeen");
+        if(wasNew&&!MemoryData.contains(newSeen,id))newSeen.put(id);
     }
     public static void validate(MemoryData m) {
         Object value = m.db.opt("flashcards"); if (value == null) return;

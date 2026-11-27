@@ -35,6 +35,7 @@ public class QuizActivity extends ThemedActivity {
     private final Handler handler=new Handler();
     private final ArrayList<QuizMathView> mathViews=new ArrayList<>();
     private final Runnable saveDraft=()->{try{save();}catch(Exception e){error(e);}};
+    private final Runnable reviewWake=()->{if(pageActive&&"practice".equals(page)&&data!=null)act(()->{persistReview(()->data.next(System.currentTimeMillis()));practice();});};
 
     @Override protected void onCreate(Bundle saved) {
         if(Ui.isDark(this))setTheme(getResources().getIdentifier("NavThemeDark","style",getPackageName()));
@@ -67,14 +68,15 @@ public class QuizActivity extends ThemedActivity {
         if("home".equals(page)&&(homeRevision!=QuizStore.revision()||!homeDate.equals(date("yyyy-MM-dd"))||!homeLink.equals(linkState()))){
             try{if(!draftDirty)data=QuizStore.snapshot(this);home();}catch(Exception e){error(e);}
         }
+        if("practice".equals(page)&&data!=null&&data.session().optBoolean("review")&&data.current()==null)act(()->{persistReview(()->data.next(System.currentTimeMillis()));practice();});
         for(QuizMathView v:mathViews)v.setPageActive(true);
         ArrayList<Runnable> ready=new ArrayList<>(deferredUi);deferredUi.clear();for(Runnable r:ready)r.run();
     }
-    @Override protected void onPause(){pageActive=false;for(QuizMathView v:mathViews)v.setPageActive(false);if(importProgress!=null)importProgress.hide();super.onPause();handler.removeCallbacks(saveDraft);if(data!=null && draftDirty)flushDraft();}
-    @Override protected void onDestroy(){deferredUi.clear();handler.removeCallbacks(saveDraft);if(importProgress!=null)importProgress.dismiss();destroyMath();super.onDestroy();}
+    @Override protected void onPause(){pageActive=false;for(QuizMathView v:mathViews)v.setPageActive(false);if(importProgress!=null)importProgress.hide();super.onPause();handler.removeCallbacks(reviewWake);handler.removeCallbacks(saveDraft);if(data!=null && draftDirty)flushDraft();}
+    @Override protected void onDestroy(){deferredUi.clear();handler.removeCallbacks(reviewWake);handler.removeCallbacks(saveDraft);if(importProgress!=null)importProgress.dismiss();destroyMath();super.onDestroy();}
     @Override public void onBackPressed(){
         if(busy)return;
-        if("home".equals(page)){super.onBackPressed();return;}
+        if("home".equals(page)){if(BackToHome.open(this))return;super.onBackPressed();return;}
         if(!flushDraft())return;   // 保存失败时留在原页，输入和脏标记都保留，可再次返回重试
         home();
     }
@@ -97,6 +99,7 @@ public class QuizActivity extends ThemedActivity {
     private void act(Runnable r){try{r.run();}catch(Exception e){error(e);}}
     private void destroyMath(){for(QuizMathView v:mathViews){if(v.getParent() instanceof ViewGroup)((ViewGroup)v.getParent()).removeView(v);v.stopLoading();v.removeAllViews();v.destroy();}mathViews.clear();}
     private void base(String title,String subtitle){
+        handler.removeCallbacks(reviewWake);
         handler.removeCallbacks(saveDraft);
         if(!flushDraft())return;   // 落盘失败时保留原页面与原输入，避免用下一页覆盖
         destroyMath();notes=null;
@@ -149,16 +152,32 @@ public class QuizActivity extends ThemedActivity {
         revealStickyActions();
     }
     private void showStickyReviewActions(){
-        if(stickyActions==null)return;
+        if(stickyActions==null||data.current()==null)return;
         stickyActions.animate().cancel();stickyActions.removeAllViews();
-        TextView correct=actionButton(T.s("核对后：做对了"),true,()->grade(true));
-        TextView review=actionButton(T.s("核对后：需复习"),false,()->grade(false));
-        LinearLayout.LayoutParams left=new LinearLayout.LayoutParams(0,ui.dp(52),1f);left.rightMargin=ui.dp(6);
-        LinearLayout.LayoutParams right=new LinearLayout.LayoutParams(0,ui.dp(52),1f);
-        stickyActions.addView(correct,left);stickyActions.addView(review,right);
+        final String id=data.current().optString("id"),day=MemoryData.date(System.currentTimeMillis());
+        long now=System.currentTimeMillis();
+        if(!QuizData.objective(data.current())) {
+            // 主观题自评是二元的：做对了＝认识，需复习＝忘记；FSRS 档位由自评推导。
+            stickyButtons(new int[]{3,1},new Boolean[]{true,false},id,day,now);
+        } else if(!data.answerCorrect()) {
+            stickyButtons(new int[]{1},new Boolean[]{null},id,day,now);
+        } else stickyButtons(new int[]{3,2,1},new Boolean[]{null,null,null},id,day,now);
         revealStickyActions();
     }
-    private LinearLayout card(){LinearLayout c=ui.card();c.setElevation(ui.dp(3));body.addView(c,ui.gap(12));return c;}
+    private void stickyButtons(int[] ratings,Boolean[] correct,String id,String day,long now) {
+        for(int i=0;i<ratings.length;i++) {
+            final int rating=ratings[i];final Boolean self=correct[i];
+            String label=rating==3?T.s("认识"):rating==2?T.s("模糊"):T.s("忘记");
+            final long due=QuizReview.preview(data,id,rating,now).due;
+            label+="\n"+new SimpleDateFormat("MM-dd HH:mm",Locale.ROOT).format(new Date(due));
+            TextView action=actionButton(label,rating==3,()->grade(self,rating,id,day));
+            action.setTextSize(13);
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,ui.dp(64),1f);
+            if(i!=ratings.length-1)lp.rightMargin=ui.dp(6);
+            stickyActions.addView(action,lp);
+        }
+    }
+    private LinearLayout card(){LinearLayout c=ui.card();body.addView(c,ui.gap(12));return c;}
     private void math(LinearLayout parent,String value){QuizMathView v=new QuizMathView(this,ui,value);mathViews.add(v);parent.addView(v);}
     private String date(String format){return new SimpleDateFormat(format,Locale.ROOT).format(new Date());}
     private String accuracy(int[] stat){return stat[0]==0?"—":Math.round(stat[1]*100f/stat[0])+"%";}
@@ -170,11 +189,12 @@ public class QuizActivity extends ThemedActivity {
         List<String> available=data.subjects();
         if(!available.contains(subject)){subject=available.isEmpty()?"":available.get(0);chapter="";}
         base(T.s("刷题"),T.s("自定义科目与题库，按自己的节奏练习。"));
-        int[] today=data.stats(date("yyyy-MM-dd")),month=data.stats(date("yyyy-MM")),all=data.stats("");
-        homeHeader(subject,today);
-        LinearLayout stats=card();TextView n=text(today[0]+T.s(" 题"),32,ui.text());n.setTypeface(Typeface.DEFAULT_BOLD);stats.addView(n);
-        hint(stats,T.s("今日作答  ·  正确率 ")+accuracy(today));
-        stats.addView(text(T.s("本月 ")+month[0]+T.s(" 题   /   累计 ")+all[0]+T.s(" 题   /   累计正确率 ")+accuracy(all),12,ui.text2()));
+        int[] today=data.stats(date("yyyy-MM-dd")),all=data.stats("");
+        int todayDays=data.statsDays(date("yyyy-MM-dd")),monthDays=data.statsDays(date("yyyy-MM")),allDays=data.statsDays("");
+        homeHeader(subject,today,todayDays);
+        LinearLayout stats=card();TextView n=text(T.f("累计学习 %d 天",allDays),32,ui.text());n.setTypeface(Typeface.DEFAULT_BOLD);stats.addView(n);
+        hint(stats,T.f("%s · 累计正确率 %s",todayDays>0?T.s("今天已学习"):T.s("今天未学习"),accuracy(all)));
+        stats.addView(text(T.f("本月学习 %d 天 / 累计学习 %d 天",monthDays,allDays),12,ui.text2()));
         if(LearningLink.quizEnabled(this))hint(stats,T.s("今日目标 ")+today[0]+" / "+LearningLink.quizTarget(this)+T.s(" 题"));
         if(data.current()!=null){JSONObject q=data.current();button(body,T.s("继续上次 · ")+q.optString("subject")+T.s(" · 第 ")+(data.session().optInt("index")+1)+T.s(" 题"),true,()->practice());}
         HorizontalScrollView subjectScroll=new HorizontalScrollView(this);subjectScroll.setHorizontalScrollBarEnabled(false);
@@ -194,23 +214,25 @@ public class QuizActivity extends ThemedActivity {
         LinearLayout practice=card();int total=data.filter(subject,"","all","").size(),wrong=data.filter(subject,"","wrong","").size(),star=data.filter(subject,"","star","").size();
         TextView heading=text(subject.equals("高数")?T.s("高等数学"):subject.equals("线代")?T.s("线性代数"):subject,21,ui.text());heading.setTypeface(Typeface.DEFAULT_BOLD);practice.addView(heading);
         hint(practice,total+T.s(" 题 · 待复习错题 ")+wrong+T.s(" · 收藏 ")+star);
-        button(practice,T.s("顺序练习"),true,()->start("all",false,""));
-        button(practice,T.s("随机练习"),false,()->start("all",true,""));
-        button(practice,T.s("只练未做题"),false,()->start("new",false,""));
+        QuizReview.Progress load=QuizReview.progress(new QuizData(data.db.toString()),System.currentTimeMillis());
+        hint(practice,T.s("今日队列 ")+load.done+" / "+load.total+T.s(" · 每天最多新学 ")+QuizReview.newLimit(data)+T.s(" 题"));
+        hint(practice,T.s("与记忆一致：到期旧题按遗忘风险优先，新题按入库顺序补位；未学稳的题到点继续巩固。"));
+        button(practice,T.s("今日刷题"),true,()->beginDailyReview());
+        button(practice,T.s("抽取与复习设置"),false,()->reviewSettings());
         button(practice,T.s("错题本 · ")+wrong+T.s(" 题"),false,()->{mode="wrong";chapter="";search="";bank();});
         button(practice,T.s("收藏夹 · ")+star+T.s(" 题"),false,()->{mode="star";chapter="";search="";bank();});
         LinkedHashMap<String,Integer> chapters=new LinkedHashMap<>();
         for(JSONObject q:data.filter(subject,"","all","")){String c=q.optString("chapter");chapters.put(c,chapters.containsKey(c)?chapters.get(c)+1:1);}
         body.addView(text(T.s("按章节练习"),17,ui.text()));
         for(Map.Entry<String,Integer> entry:chapters.entrySet()){
-            String c=entry.getKey();button(body,c+"   "+entry.getValue()+T.s(" 题  ›"),false,()->start("all",false,c));
+            String c=entry.getKey();button(body,c+"   "+entry.getValue()+T.s(" 题  ›"),false,()->{chapter=c;mode="all";search="";bank();});
         }
         button(body,T.s("题库浏览与搜索"),false,()->{mode="all";chapter="";search="";bank();});
         body.addView(subjectScroll,ui.gap(12));
         // 管理学科跟着页面走，放在最下面：不再占着首屏的固定位置
         hint(body,T.s("学科、题库与每日目标设置在守卫 → 卡管理 → 刷题卡。选择题自动判分；其他题目查看解析后自行核对。"));
     }
-    private void homeHeader(String subject,int[] today){
+    private void homeHeader(String subject,int[] today,int todayDays){
         LinearLayout head=new LinearLayout(this);
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
@@ -229,7 +251,7 @@ public class QuizActivity extends ThemedActivity {
         chips.setGravity(Gravity.CENTER_VERTICAL);
         TextView current=ui.chip(subject.isEmpty()?T.s("暂无学科"):subject,
                 ui.accent(),(ui.accent()&0x00FFFFFF)|0x26000000);
-        TextView answered=ui.chip(T.s("今日 ")+today[0]+T.s(" 题"),
+        TextView answered=ui.chip(todayDays>0?T.s("今天已学习"):T.s("今天未学习"),
                 ui.text2(),ui.surface());
         answered.setBackground(ui.round(ui.surface(),99f,
                 ui.mix(ui.line(),ui.surface(),.35f),.7f));
@@ -253,6 +275,7 @@ public class QuizActivity extends ThemedActivity {
     private void settingsHome(){
         page="home";base(T.s("刷题卡设置"),T.s("每日目标、学习联动、学科与题库。"));
         button(body,LearningLink.quizEnabled(this)?T.s("学习联动 · 每日 ")+LearningLink.quizTarget(this)+T.s(" 题"):T.s("每日题数与学习联动"),true,()->linkSettings());
+        button(body,T.s("抽取与复习设置"),false,()->reviewSettings());
         button(body,T.s("＋ 添加学科"),false,()->newSubject(()->home()));
         button(body,T.s("导入题库"),false,()->importMenu());
         button(body,T.s("模板 / 导出题库 / 格式说明"),false,()->toolsMenu());
@@ -285,18 +308,65 @@ public class QuizActivity extends ThemedActivity {
         String[] names=new String[trash.size()];for(int i=0;i<names.length;i++)names[i]=T.s("恢复「")+trash.get(i)+T.s("」 · ")+data.subjectCount(trash.get(i))+T.s(" 道题目");
         ThemeStore.dialog(this).setTitle(T.s("学科回收站")).setItems(names,(d,w)->restoreSubject(trash.get(w))).setNegativeButton(T.s("关闭"),null).show();
     }
-    private void start(String selectedMode,boolean random,String selectedChapter){
-        List<JSONObject> list=data.filter(subject,selectedChapter,selectedMode,"");
-        if(list.isEmpty()){Toast.makeText(this,T.s("这里还没有题目"),Toast.LENGTH_SHORT).show();return;}
-        Runnable go=()->act(()->{data.start(list,random);save();practice();});
-        if(data.current()!=null)ThemeStore.dialog(this).setTitle(T.s("开始新的练习？"))
-            .setMessage(T.s("上次已提交的答题记录会保留，未完成的练习队列将被替换。"))
-            .setNegativeButton(T.s("继续上次"),(d,w)->practice()).setPositiveButton(T.s("开始新练习"),(d,w)->go.run()).show();else go.run();
+    private void persistReview(Runnable mutation) {
+        QuizData before=new QuizData(data.db.toString());
+        try{mutation.run();save();}catch(RuntimeException e){data=before;throw e;}
+    }
+    private void beginDailyReview(){
+        long now=System.currentTimeMillis();
+        if(data.current()!=null&&data.session().optBoolean("review")&&MemoryData.date(now).equals(data.session().optString("date"))){practice();return;}
+        persistReview(()->data.startReview(now));practice();
+    }
+    private EditText reviewNumber(LinearLayout box,String label,String value) {
+        hint(box,label);EditText input=new EditText(this);input.setSingleLine(true);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);input.setTextColor(ui.text());input.setText(value);box.addView(input);return input;
+    }
+    private void reviewSettings(){
+        List<String> subjects=data.subjects();if(subjects.isEmpty()){Toast.makeText(this,T.s("暂无学科"),Toast.LENGTH_SHORT).show();return;}
+        LinearLayout box=new LinearLayout(this);box.setOrientation(LinearLayout.VERTICAL);box.setPadding(ui.dp(20),ui.dp(8),ui.dp(20),0);
+        hint(box,T.s("与记忆共用 FSRS；认识后按步骤巩固，模糊或忘记后当天重学。重排保留今日进度与新学额度。"));
+        Set<String> selected=LearningRules.strings(QuizReview.subjects(data));ArrayList<CheckBox> choices=new ArrayList<>();
+        for(String name:subjects){CheckBox b=new CheckBox(this);b.setText(name);b.setTextColor(ui.text());b.setChecked(selected.contains(name));choices.add(b);box.addView(b);}
+        JSONObject cfg=QuizReview.settings(data);
+        EditText count=reviewNumber(box,T.s("抽取数量（1–1000）"),String.valueOf(QuizReview.count(data)));
+        EditText newLimit=reviewNumber(box,T.s("每天新学上限（0–1000）"),String.valueOf(QuizReview.newLimit(data)));
+        EditText retention=reviewNumber(box,T.s("目标记忆率（70–97%）"),String.valueOf(Math.round(MemoryData.retention(cfg)*100)));
+        EditText max=reviewNumber(box,T.s("单次上限间隔（1–36500 天）"),String.valueOf(MemoryData.maxInterval(cfg)));
+        button(box,T.s("复习方案"),false,()->{
+            MemoryPlan.Preset[] presets=MemoryPlan.presets();String[] labels=new String[presets.length];for(int i=0;i<labels.length;i++)labels[i]=presets[i].label;
+            ThemeStore.dialog(this).setTitle(T.s("复习方案")).setItems(labels,(d,w)->{MemoryPlan.Preset p=presets[w];count.setText(String.valueOf(p.target));newLimit.setText(String.valueOf(p.newLimit));retention.setText(String.valueOf(Math.round(p.retention*100)));max.setText(String.valueOf(p.maxInterval));}).show();
+        });
+        ScrollView form=new ScrollView(this);form.addView(box);
+        AlertDialog dialog=ThemeStore.dialog(this).setTitle(T.s("抽取与复习设置")).setView(form).setPositiveButton(T.s("保存"),null).setNegativeButton(T.s("取消"),null).create();
+        dialog.setOnShowListener(d->dialog.getButton(-1).setOnClickListener(v->act(()->{
+            JSONArray chosen=new JSONArray();for(int i=0;i<choices.size();i++)if(choices.get(i).isChecked())chosen.put(subjects.get(i));
+            long now=System.currentTimeMillis();persistReview(()->{
+                QuizReview.configure(data,chosen,Integer.parseInt(count.getText().toString()),Integer.parseInt(newLimit.getText().toString()),Double.parseDouble(retention.getText().toString())/100,Integer.parseInt(max.getText().toString()),now);
+                // Reset only the pending view; the shared daily ledger and all answer history remain.
+                data.startReview(now);
+            });dialog.dismiss();home();
+        })));dialog.show();
+    }
+    private void reviewWaiting(long now) {
+        QuizReview.Progress p=QuizReview.progress(data,now);
+        base(p.nextDue>0?T.s("等待巩固"):T.s("今日刷题完成"),T.s("与记忆使用相同的到期规则，未学稳的题会到点返回。"));
+        hint(body,T.s("完成学习步骤 ")+p.done+" / "+p.total+T.s(" 题 · 今日已处理 ")+p.processed+T.s(" 题"));
+        if(p.nextDue>0)hint(body,T.s("下次复习：")+new SimpleDateFormat("MM-dd HH:mm",Locale.ROOT).format(new Date(p.nextDue)));
+        button(body,T.s("返回首页"),true,()->home());
+        // One foreground wake-up, at the earliest minute-step or the next local day. No background polling.
+        long midnight=LearningRules.endOfDay(now)+1;
+        long wake=p.nextDue>0?Math.min(midnight,p.nextDue):midnight;
+        handler.postDelayed(reviewWake,Math.max(100,wake-now));
     }
     private void practice(){
         if(managementMode){managementMode=false;getIntent().removeExtra(CardManagementActivity.EXTRA_MANAGE);}
-        page="practice";JSONObject q=data.current();
-        if(q==null){finished();return;}
+        page="practice";
+        long now=System.currentTimeMillis();
+        if(data.session().optBoolean("review")&&!MemoryData.date(now).equals(data.session().optString("date")))persistReview(()->data.startReview(now));
+        JSONObject q=data.current();
+        if(q==null){
+            if(data.session().optBoolean("review"))reviewWaiting(now);else finished();return;
+        }
         JSONObject s=data.session();JSONArray ids=s.optJSONArray("ids");
         base(q.optString("subject")+" · "+q.optString("chapter"),T.s("第 ")+(s.optInt("index")+1)+" / "+ids.length()+T.s(" 题   ·   ")+QuizData.typeName(q.optString("type")));
         String id=q.optString("id");
@@ -312,7 +382,7 @@ public class QuizActivity extends ThemedActivity {
         if(!q.optString("source").isEmpty())hint(paper,T.s("来源：")+q.optString("source"));
         boolean graded=s.optBoolean("graded"),revealed=s.optBoolean("revealed");
         if(QuizData.objective(q)){
-            if(!graded){
+            if(!graded&&!revealed){
                 hint(body,"multiple".equals(q.optString("type"))?T.s("选择所有正确选项后提交"):T.s("选择一个答案后提交"));
                 LinearLayout row=new LinearLayout(this);body.addView(row,ui.gap(12));
                 ArrayList<TextView> choices=new ArrayList<>();
@@ -334,7 +404,7 @@ public class QuizActivity extends ThemedActivity {
                         }
                     }));
                 }
-                button(body,T.s("提交答案"),true,()->grade(null));
+                button(body,T.s("提交答案"),true,()->{persistReview(()->data.checkAnswer());practice();});
             }
         } else {
             hint(body,T.s("先在纸上演算，也可以在下方记录思路。数学表达式由你核对，不作字符串判分。"));
@@ -348,20 +418,20 @@ public class QuizActivity extends ThemedActivity {
             if(!revealed)button(body,T.s("查看答案与解析"),true,()->{data.reveal();save();practice();});
         }
         if(revealed||graded){
-            if(graded){TextView result=text(s.optBoolean("correct")?T.s("✓ 回答正确"):T.s("需要复习 · 已加入错题本"),18,s.optBoolean("correct")?ui.green():ui.red());body.addView(result,ui.gap(12));}
+            if(graded||s.has("checkedCorrect")){boolean correct=s.optBoolean(graded?"correct":"checkedCorrect");TextView result=text(correct?T.s("✓ 回答正确"):T.s("需要复习"),18,correct?ui.green():ui.red());body.addView(result,ui.gap(12));}
             LinearLayout analysis=card();analysis.addView(text(T.s("答案与解析"),17,ui.text()));
             String solution=T.s("参考答案：")+q.optString("answer");
-            if(QuizData.objective(q)&&graded)solution=T.s("你的答案：")+s.optString("selected")+"\n"+solution;
+            if(QuizData.objective(q))solution=T.s("你的答案：")+s.optString("selected")+"\n"+solution;
             solution+="\n\n"+(q.optString("analysis").isEmpty()?T.s("本题未提供解析。"):q.optString("analysis"));math(analysis,solution);
             if(!graded)showStickyReviewActions();
-            else showStickyAction(s.optInt("index")+1==ids.length()?T.s("查看本轮结果"):T.s("下一题"),()->{data.next();save();practice();});
+            else showStickyAction(T.s("下一题"),()->{persistReview(()->data.next(System.currentTimeMillis()));practice();});
         }
         hint(body,T.s("本轮已完成 ")+s.optInt("done")+T.s(" 题 · 做对 ")+s.optInt("right")+T.s(" 题。返回后可继续。"));
     }
-    private void grade(Boolean self){
+    private void grade(Boolean self,int rating,String expectedId,String expectedDate){
         QuizData before=new QuizData(data.db.toString());
         LearningLink.Progress old = LearningLink.quiz(this);
-        try{data.grade(self,System.currentTimeMillis());save();}
+        try{data.grade(self,rating,System.currentTimeMillis(),expectedId,expectedDate);save();}
         catch(Exception e){data=before;throw e;}
         StudyGate.invalidate(this);syncGuard();
         LearningLink.Progress updated = LearningLink.quiz(this);

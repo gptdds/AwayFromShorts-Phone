@@ -24,12 +24,23 @@ public final class CheckinPenaltyTest {
         if (!expected.equals(actual)) throw new AssertionError(why + ": " + expected + " != " + actual);
     }
 
+    static void has(String text, String needle, String why) {
+        n++;
+        if (!text.contains(needle)) throw new AssertionError(why + ": missing " + needle + " in " + text);
+    }
+
+    static void hasNot(String text, String needle, String why) {
+        n++;
+        if (text.contains(needle)) throw new AssertionError(why + ": unexpected " + needle + " in " + text);
+    }
+
     public static void main(String[] args) {
         TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
         point();
         miss();
         sameDay();
         due();
+        phaseText();
         System.out.println("Checkin penalty: " + n + " checks passed");
     }
 
@@ -85,5 +96,26 @@ public final class CheckinPenaltyTest {
         eq(at(29, 20, 0), CheckinPenalty.dueAt(now), "20:00 取整");
         eq(21, now.get(Calendar.HOUR_OF_DAY), "dueAt 不改调用方的 Calendar");
         override();
+    }
+
+    private static void phaseText() {
+        long start = at(29, 22, 0);
+        long end = start + CheckinPenalty.EXTEND_MS;
+        String waiting = CheckinPenalty.linkageStatusText(2, 0, start, end, start - 65_000L);
+        has(waiting, "已安排", "接续前必须显示待接续语义");
+        has(waiting, "10-29 22:00:00", "接续前必须显示精确到秒");
+        has(waiting, "还有 1 分 5 秒", "接续前必须显示实时倒计时");
+        hasNot(waiting, "已生效", "接续前不能提前显示已生效");
+
+        String active = CheckinPenalty.linkageStatusText(2, 2, start, end, start + 5_000L);
+        has(active, "已生效", "跨过接续点后必须立即显示已生效");
+        has(active, "最后一笔到 10-29 22:30:00", "生效后必须显示延时后的实际结束点");
+        has(active, "还剩 29 分 55 秒", "生效后必须显示实时剩余时间");
+        hasNot(active, "已安排", "生效后不能继续显示待接续");
+
+        String partial = CheckinPenalty.linkageStatusText(2, 1, start, end, start + 5_000L);
+        has(partial, "部分已生效", "多个应用处在不同相位时不能笼统写全部生效");
+        has(partial, "1/2", "必须说明当前生效的应用数");
+        has(partial, "另有 1 个应用", "必须说明尚未接续的应用数");
     }
 }

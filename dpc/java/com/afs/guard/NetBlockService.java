@@ -71,7 +71,8 @@ public class NetBlockService extends VpnService {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (NetWindow.inside(this)) {                 // 调整时段内放开：起服务也只起个空壳
+        boolean learningHold = StudyGate.learningHoldForNetwork(this, GuardClock.now(this));
+        if (!NetWindow.shouldCut(NetBlockStore.enabled(this), NetWindow.inside(this), learningHold)) {
             Log.i(Guard.TAG, "netblock: inside adjust window " + NetWindow.label(this) + ", release");
             NetBlockStore.setRunning(this, false);
             stopSelf();
@@ -83,6 +84,11 @@ public class NetBlockService extends VpnService {
 
     private void open() {
         Set<String> packages = NetBlockStore.packages(this);
+        // 学习联动在调整时段内强断时，关键应用仍和其它联动目标一样豁免。
+        if (NetWindow.inside(this)
+                && StudyGate.learningHoldForNetwork(this, GuardClock.now(this))) {
+            packages.removeAll(RuleStore.keyApps(this));
+        }
         if (packages.isEmpty()) {
             Log.w(Guard.TAG, "netblock: no packages, refuse to establish");
             stopSelf();
@@ -245,6 +251,13 @@ public class NetBlockService extends VpnService {
      * establish 失败。连续重试没有意义，退避 60 秒再试。
      */
     public static void reconcile(Context c) {
+        if (!MasterSwitch.enabled(c)) {
+            if (NetBlockStore.running(c)) stop(c);
+            NetBlockStore.setProxyConflict(c, false);
+            NetBlockStore.clearTried(c);
+            NetFallback.reconcile(c);
+            return;
+        }
         // 用户明说「我常开代理」：一步都不碰 VPN 通道，断网交给代理里的拒绝规则。
         if (NetBlockStore.proxyMode(c)) {
             if (NetBlockStore.running(c)) stop(c);
@@ -253,7 +266,8 @@ public class NetBlockService extends VpnService {
             NetFallback.reconcile(c);
             return;
         }
-        boolean cut = NetWindow.shouldCut(NetBlockStore.enabled(c), NetWindow.inside(c));
+        boolean learningHold = StudyGate.learningHoldForNetwork(c, GuardClock.now(c));
+        boolean cut = NetWindow.shouldCut(NetBlockStore.enabled(c), NetWindow.inside(c), learningHold);
         boolean foreign = VpnSlot.foreignVpnActive(c);
         boolean conflictNow = standDown(cut, foreign);
 

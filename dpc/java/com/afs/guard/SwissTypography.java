@@ -63,11 +63,11 @@ final class SwissTypography {
         int line=Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,state.line,metrics));float size=TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,state.size,metrics);
         if(!state.applied){
             if(Math.abs(view.getTextSize()-size)>.2f)view.setTextSize(TypedValue.COMPLEX_UNIT_SP,state.size);
-            view.setIncludeFontPadding(false);view.setLetterSpacing(state.role==Role.LABEL?.08f:0);
+            view.setIncludeFontPadding(false);view.setLetterSpacing(0);
             if(Build.VERSION.SDK_INT>=28)view.setFallbackLineSpacing(true);
             if(state.role==Role.BODY){view.setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY);view.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE);}
             if(state.role==Role.TITLE||state.role==Role.SECTION||state.role==Role.LABEL){view.setGravity(Gravity.START|Gravity.CENTER_VERTICAL);view.setTextAlignment(View.TEXT_ALIGNMENT_GRAVITY);}
-            if(state.role==Role.BUTTON){view.setGravity(Gravity.CENTER);view.setMinHeight(Math.max(view.getMinimumHeight(),Math.round(44*view.getResources().getDisplayMetrics().density)));}
+            if(state.role==Role.BUTTON){view.setGravity(Gravity.CENTER);view.setMinHeight(Math.max(view.getMinimumHeight(),Math.round(48*view.getResources().getDisplayMetrics().density)));}
             if(state.role==Role.NUMBER||state.role==Role.BODY||state.role==Role.META||state.role==Role.SECTION)
                 view.setFontFeatureSettings("'tnum' 1");   // 数字一律等宽：额度/时长/时间不会跳位
             state.applied=true;
@@ -89,16 +89,16 @@ final class SwissTypography {
 
             switch(role){
                 // 标题做轻、放到 30：原来 28/600 一屏下来全是粗块，层级只能靠粗细硬撑
-                case TITLE:size=30;line=38;weight=500;break;
-                case SECTION:size=18;line=26;weight=500;break;
+                case TITLE:size=24;line=32;weight=500;break;
+                case SECTION:size=17;line=24;weight=500;break;
                 case BODY:size=15;line=24;weight=400;break;
-                case META:size=12;line=18;weight=400;break;
-                case CAPTION:size=11;line=16;weight=400;break;
+                case META:size=13;line=20;weight=400;break;
+                case CAPTION:size=12;line=18;weight=400;break;
                 case BUTTON:size=14;line=20;weight=500;break;
                 // 数据当主角：字号不减气势，字重压到 300，读数才「轻而大」
-                case NUMBER:size=36;line=44;weight=300;break;
-                case LABEL:size=11;line=16;weight=500;break;
-                case NAV:size=11;line=16;weight=500;break;
+                case NUMBER:size=32;line=40;weight=500;break;
+                case LABEL:size=12;line=18;weight=500;break;
+                case NAV:size=12;line=18;weight=500;break;
                 default:size=15;line=24;weight=400;
             }
         }

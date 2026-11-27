@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.afs.guard.statustimingqa" android:versionCode="1" android:versionName="1.0">
+    <application android:label="AFS Status Timing QA" />
+    <instrumentation android:name="com.afs.guard.StatusTimingDeviceTest" android:targetPackage="com.afs.guard" android:functionalTest="true" />
+</manifest>

@@ -25,6 +25,7 @@ final class Speech {
     private static boolean ready, broken;
     private static String pending;
     private static boolean pendingUk;
+    private static long engineGeneration;
 
     private Speech() { }
 
@@ -43,9 +44,32 @@ final class Speech {
         }
     }
 
+    /** Cancel queued/current speech without paying engine initialization again for the next card. */
+    static void stop() {
+        synchronized (Speech.class) {
+            pending = null;
+            if (engine != null) try { engine.stop(); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    /** Presentation-only state: it never reads or writes learning/check-in records. */
+    static final class CardAutoplay {
+        private String card="", word="", spoken="";
+        void show(String id,String text){card=id==null?"":id;word=text==null?"":text;}
+        String take(String current,boolean visible){
+            if(!visible||card.isEmpty()||word.isEmpty()||!card.equals(current)||card.equals(spoken))return "";
+            spoken=card;return word;
+        }
+        void clear(){card="";word="";}
+        void advance(){clear();spoken="";}
+        void markSpoken(String id){spoken=id==null?"":id;}
+        String saved(){return spoken;}
+    }
+
     /** 释放引擎；下次发音会重新初始化。 */
     static void release() {
         synchronized (Speech.class) {
+            engineGeneration++;
             if (engine != null) {
                 try { engine.stop(); engine.shutdown(); } catch (RuntimeException ignored) { }
                 engine = null;
@@ -59,10 +83,16 @@ final class Speech {
 
     private static void start(Context c) {
         if (engine != null || broken || c == null) return;
+        final long generation=++engineGeneration;
         try {
             engine = new TextToSpeech(c.getApplicationContext(), status -> {
                 synchronized (Speech.class) {
-                    if (status != TextToSpeech.SUCCESS) { broken = true; engine = null; return; }
+                    if(generation!=engineGeneration)return;
+                    if (status != TextToSpeech.SUCCESS) {
+                        broken=true;pending=null;
+                        if(engine!=null)try{engine.shutdown();}catch(RuntimeException ignored){}
+                        engine=null;return;
+                    }
                     ready = true;
                     if (pending != null) {
                         String text = pending; boolean uk = pendingUk; pending = null;
@@ -70,7 +100,7 @@ final class Speech {
                     }
                 }
             });
-        } catch (RuntimeException e) { broken = true; engine = null; }
+        } catch (RuntimeException e) { broken = true; pending = null; engine = null; }
     }
 
     private static int utter(String say, boolean uk) {
@@ -81,7 +111,7 @@ final class Speech {
         if (r == TextToSpeech.LANG_MISSING_DATA || r == TextToSpeech.LANG_NOT_SUPPORTED) return NO_VOICE;
         try {
             engine.setSpeechRate(0.95f);
-            engine.speak(say, TextToSpeech.QUEUE_FLUSH, null, "afs-" + System.currentTimeMillis());
+            if(engine.speak(say, TextToSpeech.QUEUE_FLUSH, null, "afs-" + System.currentTimeMillis())==TextToSpeech.ERROR)return NO_ENGINE;
         } catch (RuntimeException e) { return NO_ENGINE; }
         return OK;
     }

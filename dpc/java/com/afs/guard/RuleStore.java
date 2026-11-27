@@ -411,6 +411,16 @@ public final class RuleStore {
                 m.put(pkg, r);
             }
         }
-        save(c, m);
+        try {
+            String migrated = com.afs.core.rules.RuleJson.migrate(null, m.keySet(), d, s, e);
+            JSONObject entries = new JSONObject(migrated).getJSONObject("rules");
+            for (String pkg : m.keySet()) entries.getJSONObject(pkg).put("g", r.gate);
+            if (!p.edit().putString("rules_before_migration", entries.toString())
+                    .putString(K_RULES, entries.toString()).commit())
+                throw new IllegalStateException("无法保存迁移结果，旧配置已保留");
+            Hub.markConfigDirty(c);
+        } catch (org.json.JSONException error) {
+            throw new IllegalStateException("规则迁移失败，旧配置已保留", error);
+        }
     }
 }

@@ -28,6 +28,10 @@ public final class NetFallbackTest {
     public static void main(String[] args) {
         /* ---------- shouldFreeze：只有「该断网 + 隧道不在 + 确认被占 + 选了冻结」才冻 ---------- */
         ok(NetFallback.shouldFreeze(true, false, false, true, FREEZE), "全部条件满足才冻结");
+        ok(NetFallback.shouldFreeze(true, true, true, false, true, FREEZE),
+                "学习联动在调整时段内也触发兜底冻结");
+        ok(!NetFallback.shouldFreeze(true, true, false, false, true, FREEZE),
+                "没有学习联动时调整时段仍放开");
         ok(!NetFallback.shouldFreeze(false, false, false, true, FREEZE), "断网没开不冻结");
         ok(!NetFallback.shouldFreeze(true, true, false, true, FREEZE), "调整时段内放开，不冻结");
         ok(!NetFallback.shouldFreeze(true, false, true, true, FREEZE), "隧道在跑就不需要兜底");

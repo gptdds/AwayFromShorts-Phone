@@ -333,25 +333,27 @@ public final class LearningLinkDeviceTest extends Instrumentation {
             runMain(()->{View root=manager.getWindow().getDecorView();android.widget.EditText days=(android.widget.EditText)root.findViewWithTag("summary_cycle_days");check("21".contentEquals(days.getText()),"reopened input retains 21 days");days.setText("40");label(root,"保存总结周期").performClick();});
             CycleSummary forty=CardStore.snapshot(c).summary(System.currentTimeMillis());check(forty.settings("custom").days()==40&&forty.enabled("weekly")&&forty.enabled("monthly"),"40-day edit saved without replacing other selected cycles");
             runMain(()->{View root=manager.getWindow().getDecorView();check("40".contentEquals(((android.widget.EditText)root.findViewWithTag("summary_cycle_days")).getText()),"reloaded input retains 40 days");});
-            long baseline=CardStore.snapshot(c).balanceMillis();CardStore.saveLove(c,null,"QA 热爱",60);
+            CardStore.saveLove(c,null,"QA 热爱",60);
             String loveId=CardStore.snapshot(c).love().optJSONObject(0).optString("id");
-            runMain(()->completed.startActivity(new Intent(completed,CheckinActivity.class).addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)));settle();
-            runMain(()->{
-                try{call(completed,"refreshAsync",new Class<?>[0]);List<?> entries=(List<?>)field(completed,"cards");int found=-1;
-                    for(int i=0;i<entries.size();i++)if((Integer)field(entries.get(i),"type")==5){found=i;break;}
-                    check(found>=0,"love card appears in check-in deck");set(completed,"selected",found);call(completed,"render",new Class<?>[]{boolean.class},false);
-                    call(completed,"onUp",new Class<?>[]{int.class,float.class,float.class},1,0f,-10000f);
-                }catch(Exception e){throw new RuntimeException(e);}
-            });
-            check(CardStore.snapshot(c).earnedToday(System.currentTimeMillis()),"up-swipe persists the love reward");
-            Thread.sleep(600);settle();check(!(Boolean)field(completed,"busy"),"love completion animation releases gesture lock");
-            long credited=CardStore.snapshot(c).balanceMillis()-baseline;check(credited>=60000L&&credited<=3600000L,"lottery result is 1 to 60 minutes");
-            check(!CardStore.claim(c,loveId)&&CardStore.snapshot(c).balanceMillis()==baseline+credited,"daily reward cannot be claimed twice");
+            File lovePhoto=new File(c.getCacheDir(),"learning-link-love-photo.jpg");
+            try(FileOutputStream out=new FileOutputStream(lovePhoto)){out.write(new byte[]{(byte)0xFF,(byte)0xD8,(byte)0xFF,(byte)0xD9});}
+            try{
+                check(CardStore.claim(c,loveId,lovePhoto.getAbsolutePath()),"love card claims only with a saved photo");
+                check(CardStore.snapshot(c).tickets(loveId)==1,"photo claim adds exactly one ticket");
+                check(!CardStore.claim(c,loveId,lovePhoto.getAbsolutePath()),"same-day love card cannot be claimed twice");
+                long claimedAt=System.currentTimeMillis();
+                check(CardStore.snapshot(c).availableTickets(loveId,claimedAt)==0,"claimed ticket waits 24 hours before use");
+                boolean locked=false;
+                try{CardStore.use(c,loveId);}catch(IllegalStateException expected){locked=true;}
+                check(locked,"cooldown rejects immediate use");
+                CardData ready=CardStore.snapshot(c);
+                MemoryData.put(ready.earned().optJSONObject(0),"at",claimedAt-CardData.CLAIM_COOLDOWN_MS);
+                write(cards,ready.db.toString().getBytes("UTF-8"));cardFile(cards);
+                long stamp=System.currentTimeMillis();
+                check(CardStore.use(c,loveId)==60,"ticket opens the card's configured 60-minute window");
+                check(CardStore.rewardUntil(c,stamp)>stamp,"reward window persists after use");
+            }finally{lovePhoto.delete();}
             try{CardStore.saveLove(c,null,"too much",61);throw new AssertionError("hard cap missing");}catch(IllegalArgumentException expected){check(true,"60-minute cap enforced in storage");}
-            long stamp=System.currentTimeMillis();CardStore.reconcile(c,stamp,true,stamp+20*60000L);
-            check(CardStore.rewardUntil(c,stamp)>stamp,"reward reservation persisted");
-            CardStore.reconcile(c,stamp+5*60000L,false,stamp+20*60000L);
-            check(CardStore.snapshot(c).balanceMillis()==baseline+Math.max(0,credited-5*60000L),"unused reward refunded on device");
             phase("reward ledger");
             long current=System.currentTimeMillis();CardData overlapping=new CardData(current);CycleSummary schedules=overlapping.summary(current);
             schedules.configureAll(new HashSet<>(Arrays.asList("weekly","monthly")),7,CycleSummary.day(current),current);

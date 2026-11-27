@@ -11,6 +11,10 @@ final class LearningPolicy {
     static boolean holds(boolean available, boolean selected, int target, int done) {
         return available && selected && target > 0 && !complete(true, target, done);
     }
+    /** Usage-quota linkage is immediate: an unfinished check-in does not wait for 20:00. */
+    static boolean quotaHolds(boolean unfinished, boolean quotaLinked) {
+        return unfinished && quotaLinked;
+    }
     /** Daily linkage starts at 20:00; normalize legacy midnight anchors without losing overdue tasks. */
     static long dailyOrigin(Calendar now, long previous, boolean unfinished) {
         if (!unfinished) return 0L;

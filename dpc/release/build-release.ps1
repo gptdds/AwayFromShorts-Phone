@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param([string]$SigningConfig,[string]$Sdk,[string]$Python,[string]$Bash,
       [string]$Version,[int]$VersionCode,[int]$MaintenanceVersionCode,
-      [string]$Notes,[string]$NotesFile,[string]$Mirrors,[string]$Repo,[switch]$SkipPackage)
+      [string]$Notes,[string]$NotesFile,[string]$Mirrors,[string]$Repo,[switch]$SkipPackage,[switch]$Compose)
 $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 # Single source of truth for the version is dpc/build.sh; follow it when no explicit value is given.
@@ -46,9 +46,27 @@ if(!(Test-Path -LiteralPath $Bash)){throw 'Git Bash not found; specify -Bash.'}
 $config=Get-Content -Raw -Encoding UTF8 -LiteralPath $SigningConfig | ConvertFrom-Json
 $out=Join-Path $root ('dist/'+$Version)
 New-Item -ItemType Directory -Force $out | Out-Null
-$names=@('AFS_RELEASE','AFS_KEYSTORE','AFS_KEY_ALIAS','AFS_STORE_PASS','AFS_KEY_PASS','AFS_APK_OUTPUT','AFS_SDK','AFS_PYTHON','AFS_PREFILL','AFS_RECOVERY','AFS_VERSION_CODE','AFS_VERSION_NAME')
+$names=@('AFS_RELEASE','AFS_KEYSTORE','AFS_KEY_ALIAS','AFS_STORE_PASS','AFS_KEY_PASS','AFS_APK_OUTPUT','AFS_SDK','AFS_PYTHON','AFS_PREFILL','AFS_RECOVERY','AFS_VERSION_CODE','AFS_VERSION_NAME','GRADLE_USER_HOME')
 $old=@{}
 foreach($name in $names){$old[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
+function Build-AfsApk {
+    if($Compose){
+        if(!$env:GRADLE_USER_HOME){$env:GRADLE_USER_HOME=Join-Path $env:USERPROFILE '.afs-android/gradle-home'}
+        Push-Location $root
+        try {
+            & (Join-Path $root 'gradlew.bat') :app:exportSignedArtifacts --console=plain
+            if($LASTEXITCODE -ne 0){throw 'Compose release build failed'}
+            Copy-Item -LiteralPath (Join-Path $root 'build/compose-release/afs-guard.apk') -Destination $env:AFS_APK_OUTPUT -Force
+            $buildTools=Get-ChildItem (Join-Path $Sdk 'build-tools') -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+            $certInfo=& (Join-Path $buildTools.FullName 'apksigner.bat') verify --print-certs $env:AFS_APK_OUTPUT
+            $expectedCert=(Get-Content -Raw (Join-Path $root 'dpc/release/signing-certificate.sha256')).Trim()
+            if($LASTEXITCODE -ne 0 -or ($certInfo -join "`n") -notmatch ('certificate SHA-256 digest: '+[regex]::Escape($expectedCert))){throw 'Unexpected release signing certificate'}
+        } finally { Pop-Location }
+    } else {
+        & $Bash (Join-Path $root 'dpc/build.sh')
+        if($LASTEXITCODE -ne 0){throw 'Native release build failed'}
+    }
+}
 try {
     $env:AFS_RELEASE='1'
     $env:AFS_RECOVERY='0'
@@ -62,14 +80,13 @@ try {
     $env:AFS_SDK=$Sdk.Replace('\','/')
     $env:AFS_PYTHON=$Python.Replace('\','/')
     $env:AFS_PREFILL='0'
-    & $Bash (Join-Path $root 'dpc/build.sh')
-    if($LASTEXITCODE -ne 0){throw 'Release build failed'}
+    Build-AfsApk
     Write-Output "Release APK: $out/afs-guard.apk"
     $env:AFS_RECOVERY='1'
     $env:AFS_VERSION_CODE=[string]$MaintenanceVersionCode
     $env:AFS_APK_OUTPUT=(Join-Path $out 'maintenance/afs-recovery.apk').Replace('\','/')
-    & $Bash (Join-Path $root 'dpc/build.sh')
-    if($LASTEXITCODE -ne 0){throw 'Maintenance build failed'}
+    New-Item -ItemType Directory -Force (Split-Path $env:AFS_APK_OUTPUT) | Out-Null
+    Build-AfsApk
     Write-Output "Maintenance APK: $out/maintenance/afs-recovery.apk"
     if(!$SkipPackage){
         # Package = verify signature/identity + manifest.json (notes and mirror links) + zips + sums.

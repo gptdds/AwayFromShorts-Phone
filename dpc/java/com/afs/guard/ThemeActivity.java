@@ -45,6 +45,28 @@ public final class ThemeActivity extends ThemedActivity {
     private FontAdapter fontAdapter;
     private String query="";
     private boolean fontsReady;
+    private LinearLayout skinOptions;
+    private java.util.List<com.afs.guard.style.RendererFactory> skinStyles;
+    private final java.util.List<LinearLayout> skinOptionViews=new ArrayList<>();
+    private TextView qualityValue;
+    private final Runnable refreshVisualOptions=()->{
+        refreshStyleSelection();
+        refreshQualityLabel();
+    };
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener visualChanged=(prefs,key)->{
+        if("style_id".equals(key)||"effect_quality".equals(key))refreshVisualOptions.run();
+    };
+    @Override protected void onPostResume(){
+        super.onPostResume();
+        getSharedPreferences(Ui.SP,0).registerOnSharedPreferenceChangeListener(visualChanged);
+        com.afs.guard.style.EffectQualityManager.addListener(refreshVisualOptions);
+        refreshVisualOptions.run();
+    }
+    @Override protected void onPause(){
+        getSharedPreferences(Ui.SP,0).unregisterOnSharedPreferenceChangeListener(visualChanged);
+        com.afs.guard.style.EffectQualityManager.removeListener(refreshVisualOptions);
+        super.onPause();
+    }
 
     @Override protected void onCreate(Bundle saved){
         super.onCreate(saved);ui=new Ui(this);config=ThemeStore.load(this);FloatingNav.fullscreen(this);
@@ -53,6 +75,8 @@ public final class ThemeActivity extends ThemedActivity {
         if("fonts".equals(getIntent().getStringExtra("page"))){buildFonts(saved);return;}
         header(T.s("主题"),null);
         scroll=new ScrollView(this);scroll.setClipToPadding(false);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        // 换风格后本页要跟着换成新风格：整棵内容树铺风格底，再挂返回键重建，滚动位置不动。
+        StyleSurface.apply(scroll,ui,com.afs.guard.style.StyleManager.selected(this));
         body=new LinearLayout(this);body.setOrientation(LinearLayout.VERTICAL);body.setPadding(0,ui.dp(12),0,ui.dp(32));scroll.addView(body);
         buildThemePage(saved);
     }
@@ -67,7 +91,6 @@ public final class ThemeActivity extends ThemedActivity {
         choices("▣",T.s("纯黑模式"),new String[]{T.s("标准"),T.s("纯黑")},new String[]{"false","true"},String.valueOf(config.pureBlack),"black");
         colors();
         choices("▱",T.s("底栏"),new String[]{T.s("悬浮"),T.s("固定")},new String[]{"true","false"},String.valueOf(config.floating),"dock");
-        choices("♧",T.s("液态玻璃"),new String[]{T.s("无"),T.s("标准"),T.s("极致")},new String[]{"none","standard","ultra"},config.glass,"glass");
         section("A",T.s("字体"),null,null);
         LinearLayout fontCard=card();LinearLayout fontRow=row();fontRow.setPadding(ui.dp(16),ui.dp(16),ui.dp(16),ui.dp(16));
         TextView aa=text("Aa",24,ui.text());ThemeStore.excludeFont(aa);aa.setTypeface(ThemeStore.font(this,config.font,0));fontRow.addView(aa);
@@ -119,6 +142,13 @@ public final class ThemeActivity extends ThemedActivity {
         recreate();
     }
 
+    /** 换风格：先记下已按新配置生效，再把本页整体换成新风格的配色与形状。 */
+    private void markAppliedAndRecreate(){
+        markAppearanceApplied();
+        overridePendingTransition(0,0);
+        recreate();
+    }
+
     private TextView text(String value,float size,int color){TextView t=new TextView(this);t.setText(value);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);return t;}
     private LinearLayout row(){LinearLayout r=new LinearLayout(this);r.setOrientation(LinearLayout.HORIZONTAL);r.setGravity(Gravity.CENTER_VERTICAL);return r;}
     private void header(String title,Runnable action){
@@ -138,19 +168,79 @@ public final class ThemeActivity extends ThemedActivity {
         LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.setMargins(ui.dp(20),0,ui.dp(20),0);body.addView(c,lp);return c;
     }
     private void skins(){
-        section("",T.s("界面风格"),null,null);LinearLayout options=row();options.setPadding(ui.dp(20),0,ui.dp(20),ui.dp(16));body.addView(options);
-        String[] names={T.s("原有风格"),T.s("简约风格")},keys={"classic","amap"};
-        String[] notes={T.s("液态玻璃"),T.s("线条清晰")};
-        for(int i=0;i<keys.length;i++){
-            final String key=keys[i];boolean chosen=key.equals(config.skin);AppearanceConfig sample=config.copy();sample.skin=key;
-            LinearLayout option=new LinearLayout(this);option.setOrientation(LinearLayout.VERTICAL);option.setGravity(Gravity.CENTER);option.setPadding(ui.dp(10),ui.dp(10),ui.dp(10),ui.dp(10));
+        section("",T.s("界面风格"),null,null);LinearLayout options=new LinearLayout(this);options.setOrientation(LinearLayout.VERTICAL);options.setPadding(ui.dp(20),0,ui.dp(20),ui.dp(16));body.addView(options);
+        java.util.List<com.afs.guard.style.RendererFactory> styles=com.afs.guard.style.StyleRegistry.all();
+        skinOptions=options;skinStyles=styles;skinOptionViews.clear();
+        String selected=com.afs.guard.style.StyleManager.selected(this);
+        LinearLayout optionRow=null;
+        for(int i=0;i<styles.size();i++){
+            if(i%2==0){optionRow=row();LinearLayout.LayoutParams rowLp=new LinearLayout.LayoutParams(-1,-2);if(i>0)rowLp.topMargin=ui.dp(8);options.addView(optionRow,rowLp);}
+            final com.afs.guard.style.RendererFactory style=styles.get(i);
+            final String key=style.id();boolean chosen=key.equals(selected);
+            LinearLayout option=new LinearLayout(this);option.setOrientation(LinearLayout.VERTICAL);option.setGravity(Gravity.CENTER);option.setPadding(ui.dp(10),ui.dp(18),ui.dp(10),ui.dp(18));
             option.setBackground(ui.round(ui.surface(),18,chosen?ui.accent():ui.line(),chosen?1.8f:.5f));
-            ThemePreviewView miniature=new ThemePreviewView(this,sample,null,false);miniature.selected(2);option.addView(miniature,new LinearLayout.LayoutParams(ui.dp(58),ui.dp(96)));
-            TextView name=text(names[i]+(chosen?" ✓":""),13,chosen?ui.accent():ui.text());name.setTypeface(Typeface.DEFAULT_BOLD);name.setGravity(Gravity.CENTER);name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);name.setPadding(0,ui.dp(8),0,0);option.addView(name);
-            TextView subtitle=text(notes[i],10,ui.text2());subtitle.setGravity(Gravity.CENTER);subtitle.setSingleLine(true);subtitle.setEllipsize(android.text.TextUtils.TruncateAt.END);option.addView(subtitle);
-            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);if(i<keys.length-1)lp.rightMargin=ui.dp(8);options.addView(option,lp);
-            option.setSelected(chosen);option.setContentDescription(T.s("界面风格：")+names[i]+(chosen?T.s("，已选"):""));option.setOnClickListener(v->{if(key.equals(config.skin))return;AppearanceConfig next=ThemeStore.load(this);next.skin=key;save(next);});
+            TextView name=text(style.displayName(this)+(chosen?" ✓":""),13,chosen?ui.accent():ui.text());name.setTypeface(Typeface.DEFAULT_BOLD);name.setGravity(Gravity.CENTER);name.setSingleLine(false);option.addView(name,new LinearLayout.LayoutParams(-1,-2));
+            LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-1,1);if(i%2==0)lp.rightMargin=ui.dp(8);optionRow.addView(option,lp);skinOptionViews.add(option);
+            option.setSelected(chosen);option.setContentDescription(T.s("界面风格：")+style.displayName(this)+(chosen?T.s("，已选"):""));option.setOnClickListener(v->{
+                if(key.equals(com.afs.guard.style.StyleManager.selected(ThemeActivity.this)))return;
+                com.afs.guard.style.StyleManager.dispatch(ThemeActivity.this,new com.afs.guard.style.StyleUiAction(
+                        com.afs.guard.style.StyleUiAction.Kind.SELECT_STYLE,key));
+                // 风格换的是整页颜色与形状，不只是选项描边：整页重建一次，别让本页停在旧风格上。
+                markAppliedAndRecreate();
+            });
         }
+        quality();
+        Intent previewIntent=new Intent().setClassName(getPackageName(),"com.afs.guard.SharedHomeActivity");
+        try{
+            getPackageManager().getActivityInfo(previewIntent.getComponent(),0);
+            TextView open=text(T.s("查看风格效果"),14,ui.accent());
+            open.setPadding(ui.dp(20),ui.dp(8),ui.dp(20),ui.dp(16));
+            open.setMinimumHeight(ui.dp(48));
+            open.setOnClickListener(v->startActivity(previewIntent));
+            body.addView(open,new LinearLayout.LayoutParams(-1,-2));
+        }catch(android.content.pm.PackageManager.NameNotFoundException absent){}
+    }
+    private void refreshStyleSelection(){
+        if(skinOptions==null||skinStyles==null)return;
+        String key=com.afs.guard.style.StyleManager.selected(this);
+        if(com.afs.guard.style.StyleRegistry.find(key)==null)key="paper";
+        for(int n=0;n<skinOptionViews.size()&&n<skinStyles.size();n++){
+            LinearLayout item=skinOptionViews.get(n);
+            com.afs.guard.style.RendererFactory descriptor=skinStyles.get(n);
+            boolean on=descriptor.id().equals(key);
+            item.setSelected(on);item.setBackground(ui.round(ui.surface(),18,on?ui.accent():ui.line(),on?1.8f:.5f));
+            TextView label=(TextView)item.getChildAt(0);
+            label.setText(descriptor.displayName(this)+(on?" ✓":""));label.setTextColor(on?ui.accent():ui.text());
+            item.setContentDescription(T.s("界面风格：")+descriptor.displayName(this)+(on?T.s("，已选"):""));
+        }
+    }
+    private void refreshQualityLabel(){
+        if(qualityValue==null)return;
+        String[] labels={T.s("跟随系统"),T.s("高"),T.s("中"),T.s("低"),T.s("减少动效")};
+        String[] values={"auto","high","medium","low","reduced"};
+        String selected=com.afs.guard.style.EffectQualityManager.preference(this);int at=0;
+        for(int i=0;i<values.length;i++)if(values[i].equals(selected))at=i;
+        qualityValue.setText(labels[at]+" · "+com.afs.guard.style.EffectQualityManager.describe(this)+"  ⌄");
+        qualityValue.setContentDescription(T.s("特效档位，")+labels[at]+T.s("，当前")+com.afs.guard.style.EffectQualityManager.describe(this));
+    }
+    private void quality(){
+        String[] labels={T.s("跟随系统"),T.s("高"),T.s("中"),T.s("低"),T.s("减少动效")};
+        String[] values={"auto","high","medium","low","reduced"};
+        String selected=com.afs.guard.style.EffectQualityManager.preference(this);
+        int at=0;for(int i=0;i<values.length;i++)if(values[i].equals(selected))at=i;
+        LinearLayout line=row();line.setMinimumHeight(ui.dp(52));line.setPadding(ui.dp(20),0,ui.dp(20),ui.dp(8));body.addView(line);
+        TextView title=text(T.s("特效档位"),15,ui.text2());title.setTypeface(Typeface.DEFAULT_BOLD);line.addView(title,new LinearLayout.LayoutParams(0,-2,1));
+        TextView value=text(labels[at]+" · "+com.afs.guard.style.EffectQualityManager.describe(this)+"  ⌄",13,ui.text2());
+        qualityValue=value;
+        value.setContentDescription(T.s("特效档位，")+labels[at]+T.s("，当前")+com.afs.guard.style.EffectQualityManager.describe(this));line.addView(value);
+        line.setOnClickListener(v->{
+            int current=0;String pref=com.afs.guard.style.EffectQualityManager.preference(this);
+            for(int i=0;i<values.length;i++)if(values[i].equals(pref))current=i;
+            ThemeStore.dialog(this).setTitle(T.s("特效档位")).setSingleChoiceItems(labels,current,(dialog,which)->{
+            dialog.dismiss();com.afs.guard.style.StyleManager.dispatch(ThemeActivity.this,new com.afs.guard.style.StyleUiAction(
+                    com.afs.guard.style.StyleUiAction.Kind.SELECT_QUALITY,values[which]));
+            value.setText(labels[which]+" · "+com.afs.guard.style.EffectQualityManager.describe(this)+"  ⌄");
+        }).setNegativeButton(T.s("取消"),null).show();});
     }
     private void separator(LinearLayout parent){View line=new View(this);line.setBackgroundColor(ui.line());LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,Math.max(1,ui.dp(.5f)));lp.leftMargin=ui.dp(70);lp.rightMargin=ui.dp(14);parent.addView(line,lp);}
     private void choices(String glyph,String title,String[] labels,String[] values,String selected,String key){

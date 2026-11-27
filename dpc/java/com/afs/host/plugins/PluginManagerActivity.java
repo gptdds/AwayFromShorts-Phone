@@ -8,6 +8,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -16,6 +17,9 @@ import android.widget.Toast;
 import com.afs.guard.T;
 import com.afs.guard.ThemedActivity;
 import com.afs.guard.Ui;
+import com.afs.guard.plugins.AppPlugin;
+import com.afs.guard.plugins.BuiltInPluginStore;
+import com.afs.guard.plugins.DockPages;
 import com.afs.pluginapi.PluginProtocol;
 import com.afs.pluginapi.PluginStatus;
 
@@ -26,6 +30,8 @@ import java.util.List;
 public final class PluginManagerActivity extends ThemedActivity {
     private Ui ui;
     private LinearLayout body;
+    private LinearLayout builtInList;
+    private LinearLayout pluginList;
     private boolean destroyed;
 
     @Override protected void onCreate(Bundle state) {
@@ -63,27 +69,112 @@ public final class PluginManagerActivity extends ThemedActivity {
         body.addView(back);
         body.addView(ui.title(T.s("插件管理")));
         TextView note = new TextView(this);
-        note.setText(T.s("屏幕使用统计以独立 APK 提供，安装后默认停用。启用后可分别管理统计读取权和前往系统授权页的权限。已有系统授权时，仅授予读取权即可查看统计。"));
+        note.setText(T.s("屏幕使用统计已内置，无需安装独立 APK。统计访问权限由系统管理。"));
         note.setTextSize(12);
         note.setTextColor(ui.text2());
         note.setPadding(0, ui.dp(6), 0, ui.dp(12));
         body.addView(note);
+
+        LinearLayout builtIn = ui.card();
+        TextView builtInTitle = new TextView(this);
+        builtInTitle.setText(T.s("内置页面插件"));
+        builtInTitle.setTextSize(16);
+        builtInTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        builtInTitle.setTextColor(ui.text());
+        builtIn.addView(builtInTitle);
+        TextView builtInNote = new TextView(this);
+        builtInNote.setText(T.s("关闭后隐藏对应入口；学习记录、统计和冻结联动都会保留。「冻结面板」可单独停用，打卡与所有卡片功能不受影响。"));
+        builtInNote.setTextSize(12);
+        builtInNote.setTextColor(ui.text2());
+        builtInNote.setPadding(0, ui.dp(4), 0, ui.dp(6));
+        builtIn.addView(builtInNote);
+        builtInList = new LinearLayout(this);
+        builtInList.setOrientation(LinearLayout.VERTICAL);
+        builtIn.addView(builtInList);
+        renderBuiltIn();
+        body.addView(builtIn, ui.gap(10));
+
+        TextView externalTitle = new TextView(this);
+        externalTitle.setText(T.s("外部插件"));
+        externalTitle.setTextSize(12);
+        externalTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        externalTitle.setTextColor(ui.text3());
+        externalTitle.setPadding(ui.dp(4), ui.dp(16), 0, ui.dp(6));
+        body.addView(externalTitle);
+        pluginList = new LinearLayout(this);
+        pluginList.setOrientation(LinearLayout.VERTICAL);
+        body.addView(pluginList);
     }
 
     private void refresh() {
+        renderBuiltIn();
         HostRuntime.get(this).registry().refreshAsync(() -> {
             if (!destroyed) render();
         });
     }
 
+    private void renderBuiltIn() {
+        if (builtInList == null) return;
+        builtInList.removeAllViews();
+        for (final AppPlugin plugin : BuiltInPluginStore.plugins()) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, ui.dp(8), 0, ui.dp(8));
+
+            LinearLayout copy = new LinearLayout(this);
+            copy.setOrientation(LinearLayout.VERTICAL);
+            copy.setPadding(0, ui.dp(3), ui.dp(8), ui.dp(3));
+            boolean enabled = BuiltInPluginStore.enabled(this, plugin.id());
+            TextView name = new TextView(this);
+            name.setText(plugin.label() + T.s(enabled ? " · 内置 · 已启用" : " · 内置 · 已停用"));
+            name.setTextSize(14);
+            name.setTextColor(ui.text());
+            copy.addView(name);
+            TextView detail = new TextView(this);
+            detail.setText(enabled ? T.s("点击打开页面") : T.s("插件已停用"));
+            detail.setTextSize(11);
+            detail.setTextColor(enabled ? ui.accent() : ui.text3());
+            copy.addView(detail);
+            copy.setClickable(true);
+            copy.setFocusable(true);
+            copy.setOnClickListener(v -> {
+                if (!BuiltInPluginStore.enabled(this, plugin.id())) {
+                    Toast.makeText(this, T.s("插件已停用"), Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                int index = DockPages.indexOfPlugin(plugin.id());
+                Intent intent = index<0?new Intent(this,plugin.activity()):DockPages.intent(this, index, false);
+                if (intent != null) startActivity(intent);
+            });
+            row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            CheckBox toggle = new CheckBox(this);
+            toggle.setText(enabled ? T.s("已启用") : T.s("已停用"));
+            toggle.setTextSize(13);
+            toggle.setTextColor(enabled ? ui.green() : ui.text3());
+            toggle.setChecked(enabled);
+            toggle.setOnCheckedChangeListener((button, checked) -> {
+                if (checked == BuiltInPluginStore.enabled(this, plugin.id())) return;
+                if (!BuiltInPluginStore.setEnabled(this, plugin.id(), checked)) {
+                    Toast.makeText(this, T.s("保存失败，请重试"), Toast.LENGTH_LONG).show();
+                }
+                runOnUiThread(this::renderBuiltIn);
+            });
+            row.addView(toggle);
+            builtInList.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        }
+    }
+
     private void render() {
-        while (body.getChildCount() > 3) body.removeViewAt(3);
+        pluginList.removeAllViews();
         HostRuntime runtime = HostRuntime.get(this);
         List<PluginEntry> entries = new ArrayList<>(runtime.registry().entries());
+        entries.removeIf(e->"com.afs.plugin.usagestats".equals(e.packageName()));
         if (entries.isEmpty()) {
             LinearLayout card = ui.card();
             TextView text = new TextView(this);
-            text.setText(T.s("没有发现已安装的插件。请先通过系统安装器安装已签名的统计插件 APK，再回到这里刷新。"));
+            text.setText(T.s("没有其他外部插件"));
             text.setTextSize(13);
             text.setTextColor(ui.text2());
             text.setLineSpacing(ui.dp(4), 1f);
@@ -91,13 +182,13 @@ public final class PluginManagerActivity extends ThemedActivity {
             Button refresh = button(T.s("刷新"));
             refresh.setOnClickListener(v -> refresh());
             card.addView(refresh, new LinearLayout.LayoutParams(-1, ui.dp(42)));
-            body.addView(card, ui.gap(10));
+            pluginList.addView(card, ui.gap(10));
         } else {
-            for (PluginEntry entry : entries) body.addView(entryCard(entry), ui.gap(10));
+            for (PluginEntry entry : entries) pluginList.addView(entryCard(entry), ui.gap(10));
         }
         Button refresh = button(T.s("刷新目录"));
         refresh.setOnClickListener(v -> refresh());
-        body.addView(refresh, new LinearLayout.LayoutParams(-1, ui.dp(42)));
+        pluginList.addView(refresh, new LinearLayout.LayoutParams(-1, ui.dp(42)));
     }
 
     private View entryCard(PluginEntry entry) {

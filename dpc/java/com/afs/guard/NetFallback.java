@@ -40,7 +40,12 @@ final class NetFallback {
      */
     static boolean shouldFreeze(boolean enabled, boolean insideWindow, boolean tunnelRunning,
                                 boolean vpnConflict, int mode) {
-        return enabled && !insideWindow && !tunnelRunning && vpnConflict
+        return shouldFreeze(enabled, insideWindow, false, tunnelRunning, vpnConflict, mode);
+    }
+
+    static boolean shouldFreeze(boolean enabled, boolean insideWindow, boolean learningHold,
+                                boolean tunnelRunning, boolean vpnConflict, int mode) {
+        return enabled && (!insideWindow || learningHold) && !tunnelRunning && vpnConflict
                 && mode == NetBlockStore.FALLBACK_FREEZE;
     }
 
@@ -65,9 +70,14 @@ final class NetFallback {
     /** 每次隧道状态可能变化时调一次；幂等。 */
     static void reconcile(Context c) {
         try {
-            boolean desired = shouldFreeze(NetBlockStore.enabled(c), NetWindow.inside(c),
-                    NetBlockStore.running(c), blockedByOtherVpn(c), NetBlockStore.fallbackMode(c));
             Set<String> current = NetBlockStore.fallbackPackages(c);
+            if (!MasterSwitch.enabled(c)) {
+                if (!current.isEmpty()) release(c, current);
+                return;
+            }
+            boolean learningHold = StudyGate.learningHoldForNetwork(c, GuardClock.now(c));
+            boolean desired = shouldFreeze(NetBlockStore.enabled(c), NetWindow.inside(c), learningHold,
+                    NetBlockStore.running(c), blockedByOtherVpn(c), NetBlockStore.fallbackMode(c));
             if (!desired) {
                 if (!current.isEmpty()) release(c, current);
                 return;

@@ -288,38 +288,86 @@ public final class QuizData {
     }
     public void draft(String selected,String input) {put(session(),"selected",selected);put(session(),"input",input);}
     public void reveal() {if(current()!=null)put(session(),"revealed",true);}
-    public boolean grade(Boolean self,long now) {
+    public boolean answerCorrect() {
+        JSONObject q=current(),s=session();if(q==null)throw new IllegalArgumentException(T.s("题目不存在"));
+        String selected=letters(s.optString("selected"));
+        if(selected.isEmpty())throw new IllegalArgumentException(T.s("请先选择答案"));
+        if(!"multiple".equals(q.optString("type"))&&selected.length()!=1)throw new IllegalArgumentException(T.s("请只选择一个答案"));
+        for(char c:selected.toCharArray())if(c>='A'+q.optJSONArray("options").length())throw new IllegalArgumentException(T.s("选项超出范围"));
+        return selected.equals(q.optString("answer"));
+    }
+    /** Check correctness without recording a recall. Only an explicit rating commits learning. */
+    public void checkAnswer() {
+        if(current()==null||session().optBoolean("graded"))throw new IllegalArgumentException(T.s("本题已经记录，请进入下一题"));
+        put(session(),"checkedCorrect",answerCorrect());put(session(),"revealed",true);
+    }
+    public void startReview(long now) {
+        JSONObject plan=QuizReview.session(this,now),s=new JSONObject();
+        put(s,"ids",new JSONArray(new ArrayList<>(orderedIds(plan.optJSONArray("ids")))));put(s,"review",true);
+        put(s,"date",MemoryData.date(now));put(s,"done",0);put(s,"right",0);put(db,"session",s);
+        selectReview(now);
+    }
+    private static List<String> orderedIds(JSONArray a){List<String> out=new ArrayList<>();for(int i=0;i<a.length();i++)out.add(a.optString(i));return out;}
+    private void selectReview(long now) {
+        JSONObject q=QuizReview.next(this,now),s=session();JSONArray ids=s.optJSONArray("ids");int index=ids.length();
+        if(q!=null)for(int i=0;i<ids.length();i++)if(q.optString("id").equals(ids.optString(i))){index=i;break;}
+        put(s,"index",index);
+    }
+    public boolean grade(Boolean self,long now) {return grade(self,0,now,null,null);}
+    public boolean grade(Boolean self,int requestedRating,long now,String expectedId,String expectedDate) {
         JSONObject s=session(),q=current();
         if(q==null||s.optBoolean("graded"))throw new IllegalArgumentException(T.s("本题已经记录，请进入下一题"));
+        String id=q.optString("id");
+        if(expectedId!=null&&!expectedId.equals(id))throw new IllegalArgumentException(T.s("题目已更新，请重新作答"));
+        if(expectedDate!=null&&!MemoryData.date(now).equals(expectedDate))throw new IllegalArgumentException(T.s("日期已更新，请从今日刷题继续"));
+        if(s.optBoolean("review"))QuizReview.requirePending(this,id,now,s.optString("date"));
         boolean right;
-        if(objective(q)) {
-            String selected=letters(s.optString("selected"));
-            if(selected.isEmpty())throw new IllegalArgumentException(T.s("请先选择答案"));
-            if(!"multiple".equals(q.optString("type"))&&selected.length()!=1)throw new IllegalArgumentException(T.s("请只选择一个答案"));
-            for(char c:selected.toCharArray()) if(c>='A'+q.optJSONArray("options").length())throw new IllegalArgumentException(T.s("选项超出范围"));
-            right=selected.equals(q.optString("answer"));
-        } else {
-            if(self==null||!s.optBoolean("revealed"))throw new IllegalArgumentException(T.s("请先查看答案，再自行核对"));
+        if(objective(q))right=answerCorrect();
+        else {
+            if(!s.optBoolean("revealed"))throw new IllegalArgumentException(T.s("请先查看答案，再自行核对"));
+            if(self==null)throw new IllegalArgumentException(T.s("请先自行核对，再提交评分"));
             right=self;
         }
-        String id=q.optString("id");JSONObject p=progress(id);
+        int rating=requestedRating==0?(right?3:1):requestedRating;
+        if(rating<1||rating>3)throw new IllegalArgumentException("rating");
+        if(!right)rating=1; // 答错（含主观自评需复习）不能算成功回忆。
+        JSONObject p=progress(id);boolean wasNew=p.optInt("attempts")==0&&p.optInt("reps")==0;
+        MemoryScheduler.State next=QuizReview.preview(this,id,rating,now);
+        LearningRules.apply(p,next);
         put(p,"attempts",p.optInt("attempts")+1);put(p,"correct",p.optInt("correct")+(right?1:0));
-        put(p,"wrong",!right);put(p,"last",now);put(db.optJSONObject("progress"),id,p);
+        put(p,"wrong",!right);put(p,"rating",rating);put(db.optJSONObject("progress"),id,p);
+        QuizReview.complete(this,id,wasNew,now);
         String day=new SimpleDateFormat("yyyy-MM-dd",Locale.ROOT).format(new Date(now));
         JSONObject days=db.optJSONObject("days"),d=days.optJSONObject(day);if(d==null)d=new JSONObject();
         put(d,"attempts",d.optInt("attempts")+1);put(d,"correct",d.optInt("correct")+(right?1:0));put(days,day,d);
         put(s,"graded",true);put(s,"revealed",true);put(s,"correct",right);
         put(s,"done",s.optInt("done")+1);put(s,"right",s.optInt("right")+(right?1:0));return right;
     }
-    public void next() {
-        JSONObject s=session();if(current()==null)return;
+    public void next() {next(System.currentTimeMillis());}
+    public void next(long now) {
+        JSONObject s=session();
+        if(current()==null){
+            if(s.optBoolean("review")) {
+                if(!MemoryData.date(now).equals(s.optString("date")))startReview(now);else selectReview(now);
+            }
+            return;
+        }
         if(!s.optBoolean("graded"))throw new IllegalArgumentException(T.s("请先完成本题"));
-        put(s,"index",s.optInt("index")+1);
-        for(String key:Arrays.asList("selected","input","revealed","graded","correct"))s.remove(key);
+        for(String key:Arrays.asList("selected","input","revealed","graded","correct","checkedCorrect"))s.remove(key);
+        if(s.optBoolean("review")) {
+            if(!MemoryData.date(now).equals(s.optString("date"))){startReview(now);return;}
+            selectReview(now);
+        }else put(s,"index",s.optInt("index")+1);
     }
     public int[] stats(String dayPrefix) {
         int attempts=0,right=0;JSONObject days=db.optJSONObject("days");Iterator<String> it=days.keys();
         while(it.hasNext()){String d=it.next();if(d.startsWith(dayPrefix)){JSONObject a=days.optJSONObject(d);attempts+=a.optInt("attempts");right+=a.optInt("correct");}}
         return new int[]{attempts,right};
+    }
+    /** Distinct local calendar days with at least one committed answer. */
+    public int statsDays(String dayPrefix) {
+        int count=0;JSONObject days=db.optJSONObject("days");Iterator<String> it=days.keys();
+        while(it.hasNext()){String d=it.next();JSONObject a=days.optJSONObject(d);if(a!=null&&a.optInt("attempts")>0&&d.startsWith(dayPrefix))count++;}
+        return count;
     }
 }

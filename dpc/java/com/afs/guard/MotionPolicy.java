@@ -7,7 +7,7 @@ import android.os.Looper;
 import android.provider.Settings;
 
 /** Existing preferences and platform settings only; never owns an Activity or business work. */
-final class MotionPolicy {
+public final class MotionPolicy {
     private static volatile float animator=1, transition=1;
     private static boolean watching;
     private static final java.util.WeakHashMap<Runnable,Boolean> listeners=new java.util.WeakHashMap<>();
@@ -35,7 +35,7 @@ final class MotionPolicy {
             c.getContentResolver().registerContentObserver(Settings.Global.getUriFor(Settings.Global.TRANSITION_ANIMATION_SCALE),false,observer);
         }catch(RuntimeException unavailable){try{c.getContentResolver().unregisterContentObserver(observer);}catch(RuntimeException ignored){}watching=true;}
     }
-    static boolean enabled(Context c){watch(c);return !c.getSharedPreferences(Ui.SP,0).getBoolean("reduce_motion",false)&&animator>0;}
+    public static boolean enabled(Context c){watch(c);return !c.getSharedPreferences(Ui.SP,0).getBoolean("reduce_motion",false)&&animator>0;}
     static boolean navigation(Context c){return enabled(c)&&transition>0;}
     static long duration(Context c,long normal){return enabled(c)?normal:0;}
     static double timeScale(Context c){return enabled(c)?Math.max(.01f,animator):0;}

@@ -25,6 +25,8 @@ public final class MemoryStats {
 
     public static final class Summary {
         public int total, learned, dueToday, reviewedToday;
+        /** Distinct local calendar days with at least one valid review. */
+        public int activeDays;
         /** 近 7 天（含今天）的评分次数与其中记住的次数（评分 ≥3）。 */
         public int reviews7, correct7;
         /** 连续有复习记录的天数（今天还没复习就从昨天算起）。 */
@@ -61,6 +63,7 @@ public final class MemoryStats {
             }
             if (ts <= now && included(m, log.optString("deck"), selectedDecks)) days.put(MemoryData.date(ts), Boolean.TRUE);
         }
+        s.activeDays = days.size();
         s.reviewedToday = 0;
         for (JSONObject log : logs) if (log.optLong("ts") <= now && included(m, log.optString("deck"), selectedDecks) && MemoryData.date(now).equals(MemoryData.date(log.optLong("ts")))) s.reviewedToday++;
         // 今天还没开始也算连续：从昨天往回数，免得一觉醒来连续天数归零。

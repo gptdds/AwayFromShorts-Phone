@@ -9,7 +9,7 @@ import android.provider.Settings;
 import android.util.Log;
 
 /**
- * 系统级灰度：今天目标没打完 → 整台手机所有应用变灰。
+ * 系统级灰度：每日亮屏上限启用时由当日额度独立决定；否则沿用学习灰度。
  *
  * 这是「健康使用手机」超时后那套灰度的实现方式：
  * Android 辅助功能里的"色彩校正"，模式 0 = 灰度。往 Settings.Secure 写两个键，
@@ -46,15 +46,20 @@ public final class GrayMode {
      * 应用灰度状态。状态没变化时不写 —— 写 Settings.Secure 会惊动系统监听，
      * Guard.apply 又跑得勤，没必要的写一律省掉。
      */
-    public static void apply(Context c, boolean gray) {
+    public static synchronized void apply(Context c, boolean gray) {
+        if (!MasterSwitch.enabled(c)) gray = false;
+        gray = GrayPolicy.resolve(ScreenOnLimit.enabled(c),ScreenOnLimit.exceeded(c),gray);
         Boolean want = Boolean.valueOf(gray);
-        if (want.equals(lastApplied)) {
+        String enabled = Settings.Secure.getString(c.getContentResolver(), KEY_ENABLED);
+        String mode = Settings.Secure.getString(c.getContentResolver(), KEY_MODE);
+        if (want.equals(lastApplied) && (gray ? "1" : "0").equals(enabled)
+                && (!gray || GRAYSCALE.equals(mode))) {
             return;
         }
         try {
             DevicePolicyManager dpm = (DevicePolicyManager)
                     c.getSystemService(Context.DEVICE_POLICY_SERVICE);
-            boolean owner = dpm != null && dpm.isDeviceOwnerApp(c.getPackageName());
+            boolean owner = !permitted(c) && dpm != null && dpm.isDeviceOwnerApp(c.getPackageName());
             if (gray) {
                 if (owner) dpm.setSecureSetting(new ComponentName(c, AfsAdmin.class),
                         KEY_MODE, GRAYSCALE);

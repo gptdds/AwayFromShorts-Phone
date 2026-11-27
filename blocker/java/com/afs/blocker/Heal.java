@@ -62,6 +62,7 @@ final class Heal {
             PendingIntent pi = PendingIntent.getBroadcast(ctx, 1001, i, flags);
             am.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     SystemClock.elapsedRealtime() + INTERVAL_MS, INTERVAL_MS, pi);
+            ctx.getSharedPreferences("afs_runtime",Context.MODE_PRIVATE).edit().putLong("heal_scheduled",System.currentTimeMillis()).apply();
         } catch (Throwable t) {
             Log.w(TAG, "schedule heal failed: " + t);
         }
@@ -82,6 +83,12 @@ final class Heal {
                 return false;
             }
             String svc = ctx.getPackageName() + "/" + BlockerService.class.getName();
+            String enabled = Settings.Secure.getString(ctx.getContentResolver(),Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            java.util.LinkedHashSet<String> services = new java.util.LinkedHashSet<>();
+            if (enabled != null) for (String item : enabled.split(":"))
+                if (item.matches("[A-Za-z0-9_.$]+/[A-Za-z0-9_.$]+")) services.add(item);
+            services.add(svc);
+            svc = android.text.TextUtils.join(":",services);
             String cmd = "appops set " + ctx.getPackageName() + " ACCESS_RESTRICTED_SETTINGS allow; "
                     + "settings put secure enabled_accessibility_services " + svc + "; "
                     + "settings put secure accessibility_enabled 1; echo H";

@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.afs.guard.pluginqa">
+    <application android:label="AFS Master Switch QA" />
+    <instrumentation
+        android:name="com.afs.guard.pluginqa.MasterSwitchDeviceTest"
+        android:targetPackage="com.afs.guard"
+        android:functionalTest="true" />
+</manifest>

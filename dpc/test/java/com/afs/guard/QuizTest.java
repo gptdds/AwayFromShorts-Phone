@@ -134,6 +134,10 @@ public final class QuizTest {
         int[] all=m.stats("");check(all[0]==5&&all[1]==3,"aggregate totals");
         String day=new java.text.SimpleDateFormat("yyyy-MM-dd",Locale.ROOT).format(new Date(now));
         check(m.stats(day)[0]==5&&m.stats(day.substring(0,7))[0]==5,"daily monthly counters");
+        check(m.statsDays(day)==1&&m.statsDays(day.substring(0,7))==1&&m.statsDays("")==1,"multiple answers on one day count as one learning day");
+        JSONObject previousDay=new JSONObject();QuizData.put(previousDay,"attempts",2);QuizData.put(previousDay,"correct",1);
+        QuizData.put(m.db.optJSONObject("days"),"2026-10-24",previousDay);
+        check(m.statsDays("")==2&&m.statsDays("2026-10")==2,"distinct answer days aggregate");
         check(m.filter("高数","极限","wrong","").size()==1,"wrong chapter filter");
         check(m.filter("高数","","all","self").size()==1,"search stem");
         check(m.filter("线代","","all","").isEmpty(),"subject isolation");

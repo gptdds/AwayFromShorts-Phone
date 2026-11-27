@@ -109,6 +109,8 @@ public final class ToolboxActivity extends ThemedActivity {
             parked = true;
             parkedMillis = Math.max(0L, leftMillis());
             running = false;
+            Phase3Telemetry.finishFocus(this, System.currentTimeMillis(),
+                    "paused", "PAUSED");
         }
         saveFocusState();
         // 离开这一页就暂停（进度记住），人在别的页面不算在正念
@@ -158,9 +160,16 @@ public final class ToolboxActivity extends ThemedActivity {
         scroll.addView(cards);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        toolCard(cards, "◒", Ui.TILE_RUST, T.s("番茄钟"), T.s("25 分钟一轮 · 专注时锁住屏幕"), "pomodoro");
-        toolCard(cards, "◌", Ui.TILE_TEAL, T.s("正念空间"), T.s("4-4-4-4 呼吸，跟着圆圈慢下来"), "mindful");
-        toolCard(cards, "⏳", Ui.TILE_PURPLE, T.s("未来倒计时"), T.s("距离那个日子还有几天"), "future");
+        java.util.ArrayList<String> home=null;
+        String saved=getSharedPreferences("afs_tool_shelf",0).getString("home_order",null);
+        if(saved!=null)try{JSONArray ids=new JSONArray(saved);home=new java.util.ArrayList<>();for(int i=0;i<ids.length();i++)home.add(ids.getString(i));}catch(Exception ignored){}
+        java.util.ArrayList<String> box=null;
+        String savedBox=getSharedPreferences("afs_tool_shelf",0).getString("box_order",null);
+        if(savedBox!=null)try{JSONArray ids=new JSONArray(savedBox);box=new java.util.ArrayList<>();for(int i=0;i<ids.length();i++)box.add(ids.getString(i));}catch(Exception ignored){}
+        for(String id:new ToolShelfModel(home,box).box()){
+            if("usage-stats".equals(id)&&!com.afs.guard.plugins.BuiltInPluginStore.enabled(this,id))continue;
+            toolCard(cards,"",Ui.TILE_TEAL,ToolShelf.title(id),"",id);
+        }
     }
 
     private LinearLayout.LayoutParams subLp() {
@@ -174,19 +183,17 @@ public final class ToolboxActivity extends ThemedActivity {
         card.setOrientation(LinearLayout.HORIZONTAL);
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setContentDescription(title);
-        TextView icon = ui.circle(glyph, tile, 44f, 20);
-        ThemeStore.excludeFont(icon);
-        card.addView(icon);
+        card.addView(new AmapStyle.Icon(this,title,ui.text2()),new LinearLayout.LayoutParams(ui.dp(24),ui.dp(24)));
         LinearLayout words = vertical();
         TextView name = text(title, 17, ui.text());
         name.setTypeface(Typeface.DEFAULT_BOLD);
         words.addView(name);
         words.addView(text(hint, 12, ui.text2()));
         LinearLayout.LayoutParams wlp = new LinearLayout.LayoutParams(0, -2, 1);
-        wlp.leftMargin = ui.dp(14);
+        wlp.leftMargin = ui.dp(16);
         card.addView(words, wlp);
         card.addView(text("›", 24, ui.text2()));
-        card.setOnClickListener(v -> startActivity(new Intent(this, ToolboxActivity.class).putExtra("tool", tool)));
+        card.setOnClickListener(v -> ToolShelf.launch(this, tool));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.setMargins(ui.dp(20), 0, ui.dp(20), ui.dp(12));
         parent.addView(card, lp);
@@ -329,6 +336,8 @@ public final class ToolboxActivity extends ThemedActivity {
                 return;
             }
             running = false;
+            Phase3Telemetry.finishFocus(this, System.currentTimeMillis(),
+                    "paused", "PAUSED");
             leaveLockTask();
             saveFocusState();
             refreshPomodoro();
@@ -340,6 +349,7 @@ public final class ToolboxActivity extends ThemedActivity {
         }
         running = true;
         if (phase == FocusPlan.FOCUS) enterLockTask();
+        if (phase == FocusPlan.FOCUS) Phase3Telemetry.startFocus(this, endAt);
         handler.removeCallbacks(tick);
         handler.post(tick);
         saveFocusState();
@@ -348,6 +358,8 @@ public final class ToolboxActivity extends ThemedActivity {
 
     private void resetPomodoro() {
         running = false;
+        Phase3Telemetry.finishFocus(this, System.currentTimeMillis(),
+                "reset", "CANCELLED", false);
         leaveLockTask();
         phase = FocusPlan.FOCUS;
         phaseTotal = FocusPlan.phaseMillis(phase, focusMinutes, breakMinutes);
@@ -368,6 +380,10 @@ public final class ToolboxActivity extends ThemedActivity {
         if (System.currentTimeMillis() >= endAt) {
             // 阶段结束：不自动连跳，停下等用户点「开始休息 / 下一轮」。
             running = false;
+            if (phase == FocusPlan.FOCUS) {
+                Phase3Telemetry.finishFocus(this, System.currentTimeMillis(),
+                        "completed", "COMPLETED");
+            }
             leaveLockTask();
             phase = FocusPlan.nextPhase(phase);
             phaseTotal = FocusPlan.phaseMillis(phase, focusMinutes, breakMinutes);
@@ -415,6 +431,8 @@ public final class ToolboxActivity extends ThemedActivity {
             parkedMillis = p.getLong("parkedMillis", phaseTotal);
             running = false;
             endAt = System.currentTimeMillis() + parkedMillis;
+            Phase3Telemetry.finishFocus(this, System.currentTimeMillis(),
+                    "interrupted", "INTERRUPTED", false);
             return;
         }
         // 进程被杀期间阶段可能已经走完：重启后停在下一阶段，不偷偷继续跑。
@@ -423,6 +441,10 @@ public final class ToolboxActivity extends ThemedActivity {
             phase = FocusPlan.nextPhase(phase);
             phaseTotal = FocusPlan.phaseMillis(phase, focusMinutes, breakMinutes);
             endAt = System.currentTimeMillis() + phaseTotal;
+        }
+        if (!running) {
+            Phase3Telemetry.finishFocus(this, System.currentTimeMillis(),
+                    "interrupted", "INTERRUPTED", false);
         }
     }
 

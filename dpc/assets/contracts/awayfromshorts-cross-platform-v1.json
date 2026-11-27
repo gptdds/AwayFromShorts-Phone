@@ -1,0 +1,160 @@
+{
+  "id": "awayfromshorts.cross-platform",
+  "contractVersion": 1,
+  "minimumReaderVersion": 1,
+  "unknownFieldPolicy": "preserve",
+  "unknownFeaturePolicy": "warn",
+  "scopeMask": {
+    "schedule": 1,
+    "quota": 2,
+    "orSet": 4,
+    "study": 8,
+    "penalty": 16,
+    "all": 31
+  },
+  "features": [
+    {
+      "id": "freeze.schedule",
+      "version": 1,
+      "support": {
+        "pc": true,
+        "phone": true
+      },
+      "requires": [
+        "stableRuleId",
+        "timezone",
+        "weekdayMask",
+        "timeWindows"
+      ]
+    },
+    {
+      "id": "freeze.weekday-pause",
+      "version": 1,
+      "support": {
+        "pc": false,
+        "phone": true
+      },
+      "requires": [
+        "scopeMask",
+        "timezone",
+        "adjustmentWindow"
+      ]
+    },
+    {
+      "id": "quota.app",
+      "version": 1,
+      "support": {
+        "pc": true,
+        "phone": true
+      },
+      "requires": [
+        "stableRuleId",
+        "dailyMinutes",
+        "resetBoundary",
+        "platformBindings"
+      ]
+    },
+    {
+      "id": "quota.or-set",
+      "version": 1,
+      "support": {
+        "pc": false,
+        "phone": true
+      },
+      "requires": [
+        "stableGroupId",
+        "memberBindings",
+        "fiveMinuteGrace",
+        "revision"
+      ]
+    },
+    {
+      "id": "study.link",
+      "version": 1,
+      "support": {
+        "pc": true,
+        "phone": true
+      },
+      "requires": [
+        "checkinLedger",
+        "policyRevision",
+        "freshnessWindow"
+      ]
+    },
+    {
+      "id": "penalty.checkin",
+      "version": 1,
+      "support": {
+        "pc": true,
+        "phone": true
+      },
+      "requires": [
+        "checkinLedger",
+        "penaltyRevision",
+        "dailyOnce"
+      ]
+    },
+    {
+      "id": "checkin.ledger",
+      "version": 1,
+      "support": {
+        "pc": true,
+        "phone": true
+      },
+      "requires": [
+        "stableRecordId",
+        "tombstones",
+        "baseRevision"
+      ]
+    },
+    {
+      "id": "activity.usage",
+      "version": 1,
+      "support": {
+        "pc": true,
+        "phone": true
+      },
+      "requires": [
+        "eventId",
+        "platformBinding",
+        "localDayKey"
+      ]
+    },
+    {
+      "id": "memo.markdown",
+      "version": 1,
+      "support": {
+        "pc": false,
+        "phone": true
+      },
+      "requires": [
+        "stableNoteId",
+        "updatedAt",
+        "deletedAt"
+      ]
+    }
+  ],
+  "platformBindings": {
+    "pc": {
+      "appSelector": "processes",
+      "webSelector": "sites",
+      "timezone": "local"
+    },
+    "phone": {
+      "appSelector": "packages",
+      "webSelector": "sites",
+      "timezone": "local"
+    }
+  },
+  "sync": {
+    "hub": "hub-config.json",
+    "deviceSections": [
+      "pc",
+      "phone"
+    ],
+    "capabilityField": "contract",
+    "conflictPolicy": "per-domain-revision",
+    "unknownFields": "preserve",
+    "unsupportedFeature": "warn-and-skip"
+  }
+}

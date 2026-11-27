@@ -1,0 +1,47 @@
+uniform shader backdrop;
+uniform float2 textureSize,extent,origin,resolution,finger;
+uniform float time,pressure,releaseAge,role,corner,focus;
+uniform float3 baseColor;
+uniform float lightInk,semantic;
+float field(float2 p) {
+    float2 touch=p-finger;
+    p+=float2(-touch.y,touch.x)*pressure*exp(-dot(touch,touch)*8.)*.35;
+    p+=float2(sin(p.y*6.+time*.3),cos(p.x*5.-time*.26))*.12;
+    float2 a=p-float2(.23+.16*sin(time*.25),.35+.19*cos(time*.21));
+    float2 b=p-float2(.76+.16*cos(time*.19),.58+.19*sin(time*.22));
+    float2 c=p-float2(.5+.23*sin(time*.31+2.),.48+.25*cos(time*.27+1.));
+    return exp(-dot(a,a)*13.)+exp(-dot(b,b)*19.)+.65*exp(-dot(c,c)*25.);
+}
+half4 main(float2 point) {
+    float2 uv=point/max(extent,1.);
+    float radius=min(role==0.||role==5.?extent.y*.48:corner,min(extent.x,extent.y)*.5);
+    float2 q=abs(point-extent*.5)-(extent*.5-radius);
+    float distance=length(max(q,0.))+min(max(q.x,q.y),0.)-radius;
+    float density=field(uv);
+    float2 slope=float2(field(uv+float2(.008,0.))-field(uv-float2(.008,0.)),field(uv+float2(0.,.008))-field(uv-float2(0.,.008)))*37.;
+    // A continuous height field supplies curved normals and thickness, not contour lines.
+    float3 normal=normalize(float3(-slope,1.));
+    float3 light=normalize(float3(-.45+finger.x*.35,-.8+finger.y*.3,1.25));
+    float diffuse=max(0.,dot(normal,light));
+    float specular=pow(max(0.,dot(normal,normalize(light+float3(0.,0.,1.)))),48.);
+    float volume=smoothstep(.21,.66,density);
+    float thickness=smoothstep(.22,1.3,density);
+    float migration=.5+.5*sin(uv.x*4.-uv.y*2.+time*.23+density*.9);
+    half3 pigment=mix(half3(.015,.23,.95),half3(.91,.035,.33),migration);
+    pigment=mix(pigment,half3(.015,.89,.65),smoothstep(.58,1.,.5+.5*cos(uv.y*4.+time*.18)));
+    half3 liquid=pigment*(.22+.78*diffuse)*(.65+.35*thickness);
+    liquid+=half3(.72,.93,1.)*specular*.65;
+    liquid+=pigment*pow(1.-max(normal.z,0.),3.)*.23;
+    half3 ambient=backdrop.eval((origin+point+slope*9.)/resolution*textureSize).rgb;
+    half3 dark=mix(half3(.025,.035,.13),ambient,.055);
+    half3 scene=mix(dark,liquid,volume);
+    scene+=pigment*exp(-abs(density-.32)*7.)*.035;
+    half3 color=mix(mix(half3(.89,.94,.99),scene,.23),scene,lightInk);
+    color=mix(color,baseColor,semantic*.78);
+    float2 touch=uv-finger;
+    float wave=exp(-abs(length(touch)-releaseAge*.6)*23.)*exp(-releaseAge*4.);
+    color+=half3(.08,.25,.20)*(wave*.45+focus*.12);
+    float alpha=.98;
+    alpha*=1.-smoothstep(-1.,0.,distance);
+    return half4(clamp(color,0.,1.)*alpha,alpha);
+}

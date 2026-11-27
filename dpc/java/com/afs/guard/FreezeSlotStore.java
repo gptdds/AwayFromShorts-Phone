@@ -18,7 +18,7 @@ public final class FreezeSlotStore {
     private FreezeSlotStore() { }
 
     private static final java.util.LinkedHashMap<String,String> KEYS = new java.util.LinkedHashMap<>();
-    static synchronized String scheduleKey(Rule rule) {
+    public static synchronized String scheduleKey(Rule rule) {
         String source=rule.withGate(true).groupKey();
         String cached=KEYS.get(source);if(cached!=null)return cached;
         String key=computeKey(rule);KEYS.put(source,key);
@@ -38,7 +38,7 @@ public final class FreezeSlotStore {
         }
         return (normalized == null ? rule : normalized).withGate(true).groupKey();
     }
-    static boolean unassigned(Rule rule) {
+    public static boolean unassigned(Rule rule) {
         Rule normalized = rule.freezeEditorRule();
         return normalized != null && normalized.freeze
                 && (normalized.days == 0 || normalized.windowCount() == 0);
@@ -98,6 +98,16 @@ public final class FreezeSlotStore {
         c.getSharedPreferences("afs_guard", 0).edit().putString(KEY, a.toString()).apply();
     }
     public static Rule withoutSchedule() { return new Rule(0, new int[0][2], true, true); }
+
+    /**
+     * 冻结名单的移出／跨时段移动只在调整时段开放。
+     *
+     * 应用卸载后规则仍保留；不能因为目标已经不在设备上就绕过调整时段，
+     * 否则用户能在任意时间把名单清空，重装后限制就丢了。
+     */
+    static boolean membershipEditable(java.util.Calendar now, int start, int end) {
+        return now != null && TimeWindow.contains(now.getTimeInMillis(), start, end);
+    }
 
     /**
      * 删掉与给定时段相同、且已经没有任何应用的空格。

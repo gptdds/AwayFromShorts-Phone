@@ -10,41 +10,75 @@ public final class CardDataTest {
     private static void rejects(Runnable run,String message){try{run.run();}catch(IllegalArgumentException e){checks++;return;}throw new AssertionError(message);}
     private static void rewards(){
         long now=at(2026,10,27,10,0);CardData d=new CardData(now);
-        rejects(()->d.saveLove(null,"练琴",0),"zero reward rejected");rejects(()->d.saveLove(null,"练琴",61),"hard maximum enforced");
-        for(int draw=1;draw<=60;draw++){CardData sample=new CardData(now);String sampleId=sample.saveLove(null,"抽奖",30);sample.claim(sampleId,now,draw);check(sample.balanceMillis()==draw*60000L,"draw range persisted "+draw);check(!sample.claim(sampleId,now,61),"claimed day cannot redraw");}
-        CardData random=new CardData(now);String randomId=random.saveLove(null,"随机",30);random.claim(randomId,now);check(random.balanceMillis()>=60000&&random.balanceMillis()<=3600000,"production random bounded");
+        long cooldown=CardData.CLAIM_COOLDOWN_MS;
+        rejects(()->d.saveLove(null,"练琴",0),"zero minutes rejected");rejects(()->d.saveLove(null,"练琴",61),"hard maximum enforced");
         String a=d.saveLove(null,"练琴",30),b=d.saveLove(null,"绘画",60);
-        check(d.claim(a,now,30),"first hobby earns reward");check(!d.claim(a,now+1),"repeated swipe never earns twice");
-        check(!d.claim(b,now+2),"global one-card daily cap across different cards");check(d.balanceMillis()==30*60000L,"credit earned once");
-        d.archive(a,true);check(d.balanceMillis()==30*60000L,"deleting card preserves credit");d.archive(a,false);
-        check(!d.claim(b,now+3),"deleting and restoring cannot bypass daily cap");
-        long tomorrow=at(2026,10,28,10,0);check(d.claim(b,tomorrow,60),"new day permits another card");
-        check(d.balanceMillis()==90*60000L,"credits accumulate without expiring");
-        CardData restored=new CardData(d.db.toString());check(restored.balanceMillis()==d.balanceMillis()&&restored.earnedToday(tomorrow),"restart preserves ledger and daily cap");
-        check(!d.reconcile(tomorrow,false,tomorrow+3600000),"no spend without eligible scheduled freeze");check(d.balanceMillis()==90*60000L,"study or taboo exclusion preserves wallet");
-        check(d.reconcile(tomorrow,true,tomorrow+20*60000L),"automatic scheduled remission starts");
-        check(d.rewardUntil(tomorrow)==tomorrow+20*60000L,"reservation ends at next schedule boundary");
-        check(d.balanceMillis()==70*60000L,"only reserved time deducted");
-        check(!d.reconcile(tomorrow+5*60000L,true,tomorrow+20*60000L),"refresh cannot charge again");
-        check(d.reconcile(tomorrow+10*60000L,false,tomorrow+20*60000L),"new learning restriction stops remission");
-        check(d.rewardUntil(tomorrow+10*60000L)==0&&d.balanceMillis()==80*60000L,"unused reservation returned exactly once");
-        d.reconcile(tomorrow+10*60000L,false,tomorrow+20*60000L);check(d.balanceMillis()==80*60000L,"refund is idempotent");
-        d.reconcile(tomorrow+11*60000L,true,tomorrow+200*60000L);
-        check(d.rewardUntil(tomorrow+11*60000L)==tomorrow+71*60000L,"one automatic reservation cannot exceed an hour");
-        check(d.balanceMillis()==20*60000L,"remaining banked credit remains available later");
-        CardData shorted=new CardData(now);String id=shorted.saveLove(null,"运动",60);shorted.claim(id,now,60);shorted.reconcile(now,true,now+3600000);
-        shorted.reconcile(now+10*60000,true,now+20*60000);check(shorted.balanceMillis()==40*60000L,"shortened freeze boundary releases excess reservation");
-        shorted.reconcile(now+15*60000,false,now+20*60000);check(shorted.balanceMillis()==45*60000L,"partial refund cannot create extra credit");
-        check(!shorted.reconcile(now+20*60000,true,now+20*60000),"zero-length boundary never charges");
-        check(shorted.claimed(id,now)&&!shorted.claimed(id,tomorrow),"card completion tracks its real day");
-        JSONObject corrupt=MemoryData.copy(d.db);corrupt.optJSONArray("earned").put(corrupt.optJSONArray("earned").optJSONObject(0));
-        rejects(()->new CardData(corrupt.toString()),"duplicate daily reward in storage rejected");
+        rejects(()->d.claim(a,now),"photo is required before claiming a ticket");
+        check(d.claim(a,now,"photo-a.jpg"),"card A earns a ticket");
+        check("photo-a.jpg".equals(d.earned().optJSONObject(0).optString("photo")),"ticket stores its photo path");
+        check(d.claim(b,now,"photo-b.jpg"),"card B earns a ticket the same day (per-card accumulation)");
+        check(!d.claim(a,now+1,"photo-a-2.jpg"),"same card cannot earn twice in one day");
+        check(d.tickets()==2&&d.tickets(a)==1&&d.tickets(b)==1,"tickets tracked per card");
+        check(d.availableTickets(now)==0&&d.waitingTickets(now)==2,"new tickets are locked for 24 hours");
+        check(d.availableAt(d.earned().optJSONObject(0))==now+cooldown,"ticket availability is claim time plus 24 hours");
+        check(d.nextAvailableAt(a,now)==now+cooldown,"next availability reports the 24-hour boundary");
+        check(d.use(a,now)==0,"a freshly claimed ticket cannot be used");
+        check(d.use(a,now+cooldown-1)==0,"one millisecond before 24 hours is still locked");
+        long tomorrow=at(2026,10,28,10,0);
+        check(d.claim(a,tomorrow,"photo-a-next.jpg"),"new day earns another ticket on the same card");
+        check(d.tickets()==3&&d.tickets(a)==2,"tickets accumulate across days");
+        check(tomorrow==now+cooldown,"calendar fixture is exactly 24 hours later");
+        check(d.availableTickets(tomorrow)==2&&d.waitingTickets(tomorrow)==1,"only tickets older than 24 hours are available");
+        CardData restored=new CardData(d.db.toString());
+        check(restored.tickets()==3&&restored.claimed(a,tomorrow)&&restored.earnedToday(tomorrow),"restart preserves tickets and per-day cap");
+        check(restored.availableTickets(tomorrow)==2&&restored.waitingTickets(tomorrow)==1,"restart preserves the 24-hour lock state");
+        d.archive(a,true);check(d.tickets(a)==2,"archiving a card keeps its tickets");d.archive(a,false);
+        // 手动使用：只能消耗已经满 24 小时的券，窗口时长取该卡配置的分钟数
+        check(d.use(a,tomorrow)==30,"ticket unlocks exactly at 24 hours");
+        long used=tomorrow+60000L;
+        check(d.use(b,used)==60,"using a card spends one ticket for its configured minutes");
+        check(d.tickets(b)==0&&d.tickets()==1,"spent tickets are consumed");
+        check(d.rewardUntil(used)==used+60*60000L,"unfreeze window ends after card minutes");
+        check(d.rewardUntil(used+60*60000L)==0,"window expires exactly at end");
+        check(d.use(b,used+1000L)==0,"no ticket left returns 0");
+        long secondA=tomorrow+cooldown;
+        check(d.use(a,secondA-1)==0,"same card's next ticket still waits for its own 24 hours");
+        check(d.use(a,secondA)==30,"same card's next ticket unlocks at its own boundary");
+        check(d.tickets()==0,"all available tickets are consumed");
+        // 旧抽奖账本迁移：earned 带 minutes、uses 带 refund/closed
+        CardData legacyBase=new CardData(now);String oldId=legacyBase.saveLove(null,"旧卡",45);legacyBase.claim(oldId,now,"photo-old.jpg");
+        JSONObject oldEntry=legacyBase.earned().optJSONObject(0);oldEntry.remove("used");MemoryData.put(oldEntry,"minutes",37);
+        JSONObject oldUse=new JSONObject();MemoryData.put(oldUse,"start",now);MemoryData.put(oldUse,"end",now+600000L);MemoryData.put(oldUse,"refund",0);MemoryData.put(oldUse,"closed",false);
+        legacyBase.db.optJSONArray("uses").put(oldUse);
+        CardData migrated=new CardData(legacyBase.db.toString());
+        check(migrated.migrated,"legacy ledger is migrated");
+        check(migrated.tickets(oldId)==1,"legacy earned entry becomes one ticket");
+        check(migrated.availableTickets(oldId,now)==0,"legacy ticket without a new field still waits 24 hours");
+        check(migrated.availableTickets(oldId,now+cooldown)==1,"legacy ticket unlocks from its stored claim time");
+        check(migrated.rewardUntil(now)==0,"legacy automatic remission window is dropped");
+        check(new CardData(migrated.db.toString()).tickets(oldId)==1,"migrated ledger reloads cleanly");
+        // 回归：用券后的新格式账本（uses 带合法解冻窗口）绝不能被迁移清掉
+        CardData spent=new CardData(now);String spentId=spent.saveLove(null,"运动",60);spent.claim(spentId,now,"photo-spent.jpg");
+        check(spent.use(spentId,now+cooldown)==60,"ticket spent");
+        CardData reloaded=new CardData(spent.db.toString());
+        check(reloaded.rewardUntil(now+cooldown)==now+cooldown+60*60000L,"live unfreeze window survives a reload");
+        check(!reloaded.migrated,"new-format ledger is never re-migrated");
+        check(reloaded.db.optJSONArray("uses").length()==1,"used window is preserved across reloads");
+        JSONObject corrupt=MemoryData.copy(migrated.db);corrupt.optJSONArray("earned").put(corrupt.optJSONArray("earned").optJSONObject(0));
+        rejects(()->new CardData(corrupt.toString()),"duplicate ticket in storage rejected");
+        // 热爱券共同豁免时段冻结、应用使用额度和每日限额；学习联动与罚时仍按原规则。
         Calendar c=Calendar.getInstance();c.setTimeInMillis(now);Rule rule=new Rule(Rule.ALL_DAYS,new int[][]{{0,0}},true,true);
-        check(Guard.blockReason(rule,false,false,false,c,true)==0,"reward can override timed freeze");
-        check(Guard.blockReason(rule,false,true,false,c,true)==2,"reward cannot override learning gate");
-        check(Guard.blockReason(rule,false,true,true,c,true)==3,"reward cannot override taboo punishment");
+        check(Guard.blockReason(rule,false,false,false,c,true)==0,"ticket can override timed freeze");
+        check(Guard.blockReason(rule,false,true,false,c,true)==2,"ticket cannot override learning gate");
+        check(Guard.blockReason(rule,false,true,true,c,true)==3,"ticket cannot override taboo punishment");
         check(Guard.blockReason(rule,true,true,true,c,true)==0,"key-app exemption still follows existing semantics");
         check(Guard.blockReason(rule,false,false,false,c,false)==1,"expiry restores timed freeze");
+        check(Guard.rewardAdjustedReason(1,true)==0,"reward waives the app schedule");
+        check(Guard.rewardAdjustedReason(4,true)==0,"reward waives app usage quota");
+        check(Guard.rewardAdjustedReason(5,true)==0,"reward waives exhausted daily quota");
+        check(Guard.rewardAdjustedReason(2,true)==2,"reward never waives study linkage");
+        check(Guard.rewardAdjustedReason(3,true)==3,"reward never waives punishments");
+        check(Guard.rewardAdjustedReason(6,true)==6,"reward never waives key gates");
     }
     private static void summaries(){
         long start=at(2026,10,27,10,0);CardData d=new CardData(start);CycleSummary s=d.summary(start);

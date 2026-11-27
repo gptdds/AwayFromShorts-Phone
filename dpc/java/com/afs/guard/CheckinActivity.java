@@ -3,6 +3,7 @@ package com.afs.guard;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -24,6 +25,7 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.VelocityTracker;
@@ -38,6 +40,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import com.afs.guard.plugins.DockPages;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -79,6 +83,14 @@ public class CheckinActivity extends ThemedActivity {
     public static final String EXTRA_DARK = "dark";
     /** 从外面直接开功能：manage=目标管理，token=同步凭据（打卡页本体只留卡片）。 */
     public static final String EXTRA_OPEN = "open";
+    /** 从其他底栏页面返回时，先回到默认主页，再退出到桌面。 */
+    static final String EXTRA_HOME = "home";
+    /** 主页按返回：直接回桌面，不把底栏其他页再翻出来。 */
+    static void exitToDesktop(Activity activity) {
+        if (activity == null) return;
+        activity.finishAffinity();
+        activity.overridePendingTransition(0, 0);
+    }
     static final String EXTRA_LEARNING_COMPLETE = "learning_complete";
 
     private static final int DIR_NONE = 0;
@@ -90,6 +102,9 @@ public class CheckinActivity extends ThemedActivity {
     private static final int RC_IMPORT = 42;
     private static final int RC_BG = 43;
     private static final int RC_FONT = 45;
+    private static final int RC_LOVE_PHOTO = 46;
+    private static final int LOVE_SOURCE_CARD = 1;
+    private static final int LOVE_SOURCE_DONE = 2;
 
     /** Voyage 那套蓝：深色底上比原来的青色克制，也和首页主卡同一个色。 */
     private int ACCENT = 0xFF3D7BF5;
@@ -99,6 +114,7 @@ public class CheckinActivity extends ThemedActivity {
     private static final int GREEN_D = 0xFF3DDC84;
 
     private boolean dark;
+    private boolean launcherColdStart;
     /** 主题与配色基线（深色为主，浅色可切）。 */
     private Ui look;
     private int bg, cardBg, ghostBg, textC, text2C, text3C, lineC, trackC, greenC, redC;
@@ -121,22 +137,25 @@ public class CheckinActivity extends ThemedActivity {
         static final int QUIZ = 3;
         static final int SUMMARY = 4;
         static final int LOVE = 5;
+        static final int TODO = 6;
         final int type;
         final String taboo;              // TABOO：禁忌项名字
         final Goal goal;    // GOAL：目标
         final int gi;                    // GOAL：goals 里的下标（改数量等回查用）
         final CycleSummary.Period summary;
         final JSONObject love;
+        final TodoStore.Todo todo;
 
         Entry(int type, String taboo, Goal goal, int gi) {
             this.type = type;
             this.taboo = taboo;
             this.goal = goal;
             this.gi = gi;
-            this.summary=null;this.love=null;
+            this.summary=null;this.love=null;this.todo=null;
         }
-        Entry(CycleSummary.Period summary){this.type=SUMMARY;this.summary=summary;this.love=null;this.taboo=null;this.goal=null;this.gi=-1;}
-        Entry(JSONObject love){this.type=LOVE;this.love=love;this.summary=null;this.taboo=null;this.goal=null;this.gi=-1;}
+        Entry(CycleSummary.Period summary){this.type=SUMMARY;this.summary=summary;this.love=null;this.todo=null;this.taboo=null;this.goal=null;this.gi=-1;}
+        Entry(JSONObject love){this.type=LOVE;this.love=love;this.summary=null;this.todo=null;this.taboo=null;this.goal=null;this.gi=-1;}
+        Entry(TodoStore.Todo todo){this.type=TODO;this.todo=todo;this.summary=null;this.love=null;this.taboo=null;this.goal=null;this.gi=-1;}
     }
 
     /* 黑卡配色：卡面是黑的（不跟主题走），字必须是亮的 */
@@ -164,6 +183,28 @@ public class CheckinActivity extends ThemedActivity {
     private CardData cardData;
     private String completionAnimation;
     private final Runnable weeklyTick = this::onWeeklyTick;
+    /** 打卡页开着时，定时待办一到点就立刻重排卡组。 */
+    private String todoDueSignature = "";
+    private final Runnable todoTick = new Runnable() {
+        @Override
+        public void run() {
+            if (isFinishing() || isDestroyed()) {
+                return;
+            }
+            if (!busy && dir == DIR_NONE) {
+                String next;
+                try {
+                    next = TodoStore.dueSignature(TodoStore.all(CheckinActivity.this), System.currentTimeMillis());
+                } catch (RuntimeException ignored) {
+                    next = todoDueSignature;
+                }
+                if (!next.equals(todoDueSignature)) {
+                    refreshAsync();
+                }
+            }
+            ui.postDelayed(this, 30000L);
+        }
+    };
 
     private void onWeeklyTick() {
         if (isFinishing()) return;
@@ -191,6 +232,9 @@ public class CheckinActivity extends ThemedActivity {
     private View gestureCard;
     private Entry gestureEntry;
     private String gestureDay;
+    private String pendingLoveId;
+    private int pendingLoveSource;
+    private File pendingLovePhoto;
     private void cancelCardGesture(){gestureArmed=false;gestureCard=null;gestureEntry=null;dir=DIR_NONE;ui.removeCallbacks(longPress);if(vt!=null){vt.recycle();vt=null;}}
     private boolean cardTouchReady(MotionEvent event){if(card==null||busy||completionAnimation!=null||!card.isShown()||!hasWindowFocus()||card.getAlpha()<.95f||card.getWidth()==0||card.getHeight()==0)return false;
         android.graphics.Rect bounds=new android.graphics.Rect();return card.getGlobalVisibleRect(bounds)&&bounds.contains((int)event.getRawX(),(int)event.getRawY());}
@@ -225,6 +269,26 @@ public class CheckinActivity extends ThemedActivity {
             unverifiedRec.amount=b.getDouble("motion_receipt_amount");unverifiedRec.ts=b.getLong("motion_receipt_ts");
         }
         super.onCreate(b);
+        if(b!=null){
+            pendingLoveId=b.getString("love_photo_id",null);
+            pendingLoveSource=b.getInt("love_photo_source",0);
+            String pendingPhotoPath=b.getString("love_photo_file",null);
+            pendingLovePhoto=pendingPhotoPath==null?null:new File(pendingPhotoPath);
+            busy=pendingLoveId!=null;
+        }
+        if (b == null && !DockPages.isEnabled(this, DockPages.CHECKIN)
+                && Intent.ACTION_MAIN.equals(getIntent().getAction())
+                && getIntent().getCategories() != null
+                && getIntent().getCategories().contains(Intent.CATEGORY_LAUNCHER)) {
+            startActivity(new Intent(this, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+            finish();
+            return;
+        }
+        launcherColdStart = b == null && getIntent() != null
+                && Intent.ACTION_MAIN.equals(getIntent().getAction())
+                && getIntent().getCategories() != null
+                && getIntent().getCategories().contains(Intent.CATEGORY_LAUNCHER);
         if(b==null&&getIntent().getBooleanExtra("backup_only",false))getWindow().getDecorView().post(()->backupMenu());
         dark = Ui.isDark(this);   // 主题是全局设置：不再跟着首页那张"是否全部屏蔽"走
         look = new Ui(this);
@@ -234,6 +298,13 @@ public class CheckinActivity extends ThemedActivity {
         loadLocal();
         render(false);
         Hub.kick(this);   // 进页面顺手把台账推一下（有节流，脏标记优先）
+        // 打卡页接管桌面入口：原本由首页 onCreate/onResume 负责的启动工作在这里补一次。
+        // 每个调用都幂等，回前台再走一遍也不会重复冻结或重复提醒。
+        try { CheckinPenalty.tick(this); } catch (RuntimeException ignored) { }
+        Guard.ensureService(this);
+        if (RuleStore.alignRequestedRules(this)) {
+            new Thread(() -> Guard.apply(CheckinActivity.this), "afs-rule-correction").start();
+        }
         // 别的页面直接点名要某个功能（打卡页本体已经收成纯卡片）
         String open = getIntent() == null ? null : getIntent().getStringExtra(EXTRA_OPEN);
         if ("manage".equals(open)) {
@@ -267,6 +338,24 @@ public class CheckinActivity extends ThemedActivity {
         String previous=getIntent().getStringExtra(EXTRA_OPEN);
         boolean previousManagement=getIntent().getBooleanExtra(CardManagementActivity.EXTRA_MANAGE,false);
         setIntent(intent);
+        if (intent.getBooleanExtra(EXTRA_HOME, false)) {
+            intent.removeExtra(EXTRA_HOME);
+            if (tabooDialog != null) {
+                if (tabooPage == null || "taboo".equals(intent.getStringExtra(EXTRA_OPEN))) tabooDialog.dismiss();
+                else closeTabooPage();
+            }
+            if (manageDialog != null) manageDialog.dismiss();
+            if (rootBox != null) rootBox.setVisibility(View.VISIBLE);
+            if (backdropView != null) backdropView.setVisibility(Backdrop.has(this) ? View.VISIBLE : View.GONE);
+            if (backdropTint != null) backdropTint.setVisibility(Backdrop.has(this) ? View.VISIBLE : View.GONE);
+        // 从卡管理/禁忌卡这类独立子页返回时，页面背景曾被换成管理页底色，必须一起还原。
+        if (pageHost != null) {
+            pageHost.setBackgroundColor(look == null ? 0xFFFAFAF9 : look.bg());
+            if (look != null && !Backdrop.has(this))
+                StyleSurface.apply(pageHost, look, com.afs.guard.style.StyleManager.selected(this));
+            getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(look == null ? 0xFFFAFAF9 : look.bg()));
+        }
+        }
         if((intent.getBooleanExtra("from_bottom_nav",false)
                 || intent.hasExtra(EXTRA_LEARNING_COMPLETE)) && previous!=null) {
             if(manageDialog!=null)manageDialog.dismiss();
@@ -279,11 +368,36 @@ public class CheckinActivity extends ThemedActivity {
         }
     }
 
+    /**
+     * 默认主页按返回：先收起还开着的表格/子页，再让整条任务回桌面。
+     * 不能只调 super：任务栈里还留着冻结、守卫等底栏页，系统会把它们翻出来。
+     */
+    @Override
+    public void onBackPressed() {
+        if (tabooDialog != null) { tabooDialog.dismiss(); return; }
+        if (manageDialog != null) { manageDialog.dismiss(); return; }
+        super.onBackPressed();
+        exitToDesktop(this);
+    }
+
     @Override
     protected void onResume() {
         cardResumed=true;
         reconcileReceipt();
+        // 打卡页现在是桌面入口：首页不在了，学习闸门灰度要看这张卡的可见性
+        MainActivity.enterHome(this);
         super.onResume();
+        if (launcherColdStart) {
+            launcherColdStart = false;
+            getWindow().getDecorView().post(() -> {
+                SetupGuide.showIfNeeded(CheckinActivity.this);
+                AchievementCenter.announce(CheckinActivity.this);
+                RestAlert.deliverPending(CheckinActivity.this);
+                AlertPopupActivity.deliverPending(CheckinActivity.this);
+            });
+        } else {
+            getWindow().getDecorView().post(() -> AlertPopupActivity.deliverPending(CheckinActivity.this));
+        }
         if (dark != Ui.isDark(this)) {
             recreate();
             return;
@@ -296,6 +410,8 @@ public class CheckinActivity extends ThemedActivity {
         completionAnimation = completed;
         refreshAsync();
         scheduleWeeklyRefresh();
+        ui.removeCallbacks(todoTick);
+        ui.postDelayed(todoTick, 30000L);
         if (completed != null) {
             int index = indexOfKey(completed);
             if (index >= 0 && entryHandled(cards.get(index))) {
@@ -320,11 +436,15 @@ public class CheckinActivity extends ThemedActivity {
 
     @Override
     protected void onPause() {
+        if(deferTimePicker!=null){deferTimePicker.dismiss();deferTimePicker=null;}
+        if(deferDialog!=null)deferDialog.dismiss();
         cardResumed=false;cancelCardVisual();
+        MainActivity.leaveHome(this);
         super.onPause();
         cancelCardGesture();
         ui.removeCallbacks(longPress);
         ui.removeCallbacks(weeklyTick);
+        ui.removeCallbacks(todoTick);
         stopHover();
     }
 
@@ -569,6 +689,8 @@ public class CheckinActivity extends ThemedActivity {
         FrameLayout host = new FrameLayout(this);
         pageHost = host;
         host.setBackgroundColor(pageBg);
+        // 没有自定义亚克力底图时，页面铺当前风格的背景；有图时图仍然是主角。
+        if (!Backdrop.has(this)) StyleSurface.apply(host, look, com.afs.guard.style.StyleManager.selected(this));
 
         backdropView = new ImageView(this);
         backdropView.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -582,6 +704,7 @@ public class CheckinActivity extends ThemedActivity {
         backdropTint.setVisibility(Backdrop.has(this) ? View.VISIBLE : View.GONE);
         host.addView(backdropTint, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        host.setTag(R.id.visual_page,new View[]{backdropView,backdropTint});
 
         rootBox = root;
         host.addView(root, new FrameLayout.LayoutParams(
@@ -737,11 +860,18 @@ public class CheckinActivity extends ThemedActivity {
         }
 
         if (cards.isEmpty()) {
-            topSub.setText(goals.isEmpty()
-                    ? T.s("还没有学习目标")
-                    : T.s("今天的卡都处理完了"));
+            int upcoming = 0;
+            try {
+                upcoming = TodoStore.pending(TodoStore.all(this)).size();
+            } catch (RuntimeException ignored) {
+            }
+            topSub.setText(upcoming > 0
+                    ? T.s("定时待办到点后会出现在这里")
+                    : goals.isEmpty() ? T.s("还没有学习目标") : T.s("今天的卡都处理完了"));
             stage.addView(emptyCard());
-            footHint.setText(T.s("到守卫 → 卡管理添加卡片"));
+            footHint.setText(upcoming > 0
+                    ? T.s("可从首页 → 待办卡查看或改时间")
+                    : T.s("到守卫 → 卡管理添加卡片"));
             return;
         }
 
@@ -755,6 +885,7 @@ public class CheckinActivity extends ThemedActivity {
             renderDots();
             footHint.setText(T.s("今天的卡都处理完了 · 已存本机"));
             footHint.setTextColor(greenC);
+            addLoveEntry();
             return;
         }
 
@@ -798,9 +929,11 @@ public class CheckinActivity extends ThemedActivity {
         View built = e.type == Entry.TABOO ? buildTabooCard(e, index)
                 : e.type == Entry.GOAL ? buildCard(e.goal, index)
                 : e.type == Entry.LOVE ? buildLoveCard(e,index)
-                : e.type == Entry.SUMMARY ? buildSummaryCard(e,index) : buildLearningCard(e, index);
-        int palette=e.type==Entry.TABOO?CardPalette.TABOO:e.type==Entry.GOAL?CardPalette.GOAL:e.type==Entry.MEMORY?CardPalette.MEMORY:e.type==Entry.QUIZ?CardPalette.QUIZ:e.type==Entry.LOVE?CardPalette.LOVE:CardPalette.SUMMARY;
+                : e.type == Entry.SUMMARY ? buildSummaryCard(e,index)
+                : e.type == Entry.TODO ? buildTodoCard(e,index) : buildLearningCard(e, index);
+        int palette=e.type==Entry.TABOO?CardPalette.TABOO:e.type==Entry.GOAL?CardPalette.GOAL:e.type==Entry.MEMORY?CardPalette.MEMORY:e.type==Entry.QUIZ?CardPalette.QUIZ:e.type==Entry.LOVE?CardPalette.LOVE:e.type==Entry.TODO?CardPalette.TODO:CardPalette.SUMMARY;
         CardPalette.apply(built,palette,entryHandled(e));
+        built.setTag(R.id.visual_card,Boolean.TRUE);
         if (!"default".equals(fontChoice())) { ThemeStore.excludeFont(built); applyCardFont(built); }
         ThemeStore.typography(built); // Apply metrics before a sliding card is first laid out.
         return built;
@@ -834,8 +967,62 @@ public class CheckinActivity extends ThemedActivity {
     }
     private View buildSummaryCard(Entry e,int index){CycleSummary.Period p=e.summary;return specialCard(T.s("总结卡"),p.cycleLabel+T.s("总结"),p.complete?T.s("已完成"):System.currentTimeMillis()>=p.endAt?T.s("待补总结"):T.s("待完成"),
             p.start+T.s(" 至 ")+p.through+T.s("\n周期末 20:00 后未完成会延长冻结，跨周期仍需补完。"),index,p.complete);}
-    private View buildLoveCard(Entry e,int index){return specialCard(T.s("热爱卡"),e.love.optString("title"),T.s("抽奖 · 1–60 分钟"),
-            T.s("上滑完成这项热爱，奖励可累计。\n每天最多一张，单次最多 60 分钟，仅抵扣定时冻结。"),index,entryHandled(e));}
+    private View buildLoveCard(Entry e,int index){return specialCard(T.s("热爱卡"),e.love.optString("title"),T.s("拍照后攒一张券"),
+            T.s("上滑先拍一张照片，拍完才攒一张券，满 24 小时后可用。"),index,entryHandled(e));}
+
+    /** 待办卡：独立于学习，上滑完成、下滑自定义延时；不延长冻结，也不算学习进度。 */
+    private View buildTodoCard(Entry e, int index) {
+        TodoStore.Todo todo = e.todo;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(24), dp(20), dp(24));
+        box.setBackground(cardBackground(false));
+        box.addView(look.sub(T.s("待办卡") + "   " + (index + 1) + " / " + cards.size()));
+
+        TextView title = look.title(TodoStore.displayTitle(todo));
+        title.setPadding(0, dp(18), 0, 0);
+        title.setMaxLines(3);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        box.addView(title);
+
+        LinearLayout middle = new LinearLayout(this);
+        middle.setOrientation(LinearLayout.VERTICAL);
+        middle.setGravity(Gravity.CENTER);
+        String detail = todo == null ? "" : TodoStore.oneLine(todo.detail);
+        if (detail.equals(TodoStore.oneLine(todo == null ? "" : todo.title))) {
+            detail = "";
+        }
+        TextView detailView = look.sub(detail.isEmpty() ? T.s("没有补充说明") : detail);
+        detailView.setTextSize(16);
+        detailView.setGravity(Gravity.CENTER);
+        detailView.setMaxLines(5);
+        detailView.setEllipsize(TextUtils.TruncateAt.END);
+        detailView.setLineSpacing(dp(2), 1f);
+        middle.addView(detailView);
+        box.addView(middle, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        TextView meta = look.sub(todoScheduleText(todo));
+        meta.setGravity(Gravity.CENTER);
+        box.addView(meta);
+
+        TextView hint = look.sub(T.s("↑ 完成    ↓ 延时"));
+        hint.setGravity(Gravity.CENTER);
+        hint.setPadding(0, dp(10), 0, 0);
+        box.addView(hint);
+        return box;
+    }
+
+    private String todoScheduleText(TodoStore.Todo todo) {
+        if (todo == null) {
+            return "";
+        }
+        if (todo.remindAt <= 0L) {
+            return T.s("立即待办 · 定时未设");
+        }
+        String when = new java.text.SimpleDateFormat(T.s("M月d日 HH:mm"), T.locale())
+                .format(new java.util.Date(todo.remindAt));
+        return T.s("定时 · ") + when;
+    }
 
     private void applyCardFont(View view) {
         if (view instanceof TextView) ((TextView) view).setTypeface(uiFont());
@@ -947,7 +1134,8 @@ public class CheckinActivity extends ThemedActivity {
 
         // ---- 卡片里的手势提示（跟着卡一起飞走，比底部那行更容易看见）----
         cardHint = new TextView(this);
-        cardHint.setText(done ? T.s("已打卡 · 左右推换目标") : "");
+        cardHint.setText(done ? T.s("已打卡 · 左右推换目标")
+                : g.downTaboo ? T.s("↑ 打卡   ↓ 按禁忌认领") : "");
         cardHint.setTextColor(done ? text3C : ACCENT);
         cardHint.setTextSize(13);
         cardHint.setGravity(Gravity.START);
@@ -967,7 +1155,6 @@ public class CheckinActivity extends ThemedActivity {
         final String name = e.taboo;
         boolean claimed = tabooClaimedToday(name);
         boolean declined = !claimed && tabooDeclinedToday(name);
-        int min = tabooPenaltyMin(this);
         long until = StudyGate.tabooUntil(this);
         boolean holding = StudyGate.tabooActive(this);
 
@@ -1014,8 +1201,8 @@ public class CheckinActivity extends ThemedActivity {
 
         TextView meta = new TextView(this);
         meta.setText(holding
-                ? T.s("惩罚期至 ") + hmOf(until) + T.s(" · 认领再加 ") + min + T.s(" 分钟")
-                : T.s("认领一次 · 冻结延长 ") + min + T.s(" 分钟"));
+                ? T.f("延时冻结至 %s · 认领时 %s", hmsOf(until), tabooPenaltySummary(this))
+                : T.f("认领一次 · %s", tabooPenaltySummary(this)));
         meta.setTextColor(TABOO_TEXT2);
         meta.setTextSize(12);
         meta.setPadding(0, dp(6), 0, 0);
@@ -1052,7 +1239,7 @@ public class CheckinActivity extends ThemedActivity {
         sub.setGravity(Gravity.START);
         sub.setPadding(0, dp(6), 0, 0);
         if (claimed) {
-            sub.setText(T.s("已安排在各应用冻结结束后追加 · 长按可再认一次"));
+            sub.setText(T.f("已按开关记录认领 · %s · 长按可再认一次", tabooPenaltySummary(this)));
             sub.setTextColor(TABOO_TEXT2);
         } else if (declined) {
             sub.setText(T.s("今天没做 · 明天照常出现"));
@@ -1165,15 +1352,16 @@ public class CheckinActivity extends ThemedActivity {
 
     private View emptyCard() {
         LinearLayout box = new LinearLayout(this);
+        box.setTag(R.id.visual_card,Boolean.TRUE);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER);
-        box.setPadding(dp(26), dp(26), dp(26), dp(26));
+        box.setPadding(dp(24), dp(32), dp(24), dp(32));
         GradientDrawable bgd = round(cardBg, dp(look.amap?16:22));
         bgd.setStroke(dp(1), lineC);
         box.setBackground(bgd);
 
         TextView t = new TextView(this);
-        t.setText(T.s("读不到今日目标"));
+        t.setText(T.s("打卡"));
         t.setTextColor(textC);
         t.setTextSize(19);
         t.setTypeface(bold());
@@ -1181,7 +1369,7 @@ public class CheckinActivity extends ThemedActivity {
         box.addView(t);
 
         TextView s = new TextView(this);
-        s.setText(T.s("数据来自电脑端学习台，PC 没在同步就会空着 ——\n点右上角「刷新」重试。"));
+        s.setText(T.s("还没有学习目标。添加一个目标，开始记录每天的进度。"));
         s.setTextColor(text2C);
         s.setTextSize(12);
         s.setGravity(Gravity.CENTER);
@@ -1195,7 +1383,8 @@ public class CheckinActivity extends ThemedActivity {
         tplBtn.setTextColor(ACCENT);
         tplBtn.setTextSize(13);
         tplBtn.setTypeface(bold());
-        tplBtn.setPadding(0, dp(18), 0, 0);
+        tplBtn.setPadding(0, dp(16), 0, 0);
+        tplBtn.setMinHeight(dp(48));
         tplBtn.setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 startActivity(new Intent(CheckinActivity.this,CardManagementActivity.class));
@@ -1204,8 +1393,8 @@ public class CheckinActivity extends ThemedActivity {
         box.addView(tplBtn);
 
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        lp.setMargins(dp(16), dp(6), dp(16), dp(6));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(dp(20), dp(24), dp(20), dp(24));
         box.setLayoutParams(lp);
         return box;
     }
@@ -1239,6 +1428,7 @@ public class CheckinActivity extends ThemedActivity {
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
+        observeVisualTouchEvent(ev);
         if(ev.getActionMasked()==MotionEvent.ACTION_DOWN){cancelCardGesture();if(!cardTouchReady(ev))return super.dispatchTouchEvent(ev);gestureArmed=true;gestureCard=card;gestureEntry=entryAt(selected);gestureDay=StudyStore.today();}
         else if(!gestureArmed)return super.dispatchTouchEvent(ev);
         else if(ev.getPointerCount()>1||ev.getActionMasked()==MotionEvent.ACTION_POINTER_DOWN||card!=gestureCard||entryAt(selected)!=gestureEntry||!StudyStore.today().equals(gestureDay)){cancelCardGesture();dropPre();spring();return true;}
@@ -1432,6 +1622,11 @@ public class CheckinActivity extends ThemedActivity {
     @Override protected void onSaveInstanceState(Bundle out){
         if(unverifiedRec!=null){out.putString("motion_receipt_id",unverifiedRec.id);out.putString("motion_receipt_goal",unverifiedRec.goalId);
             out.putString("motion_receipt_date",unverifiedRec.date);out.putDouble("motion_receipt_amount",unverifiedRec.amount);out.putLong("motion_receipt_ts",unverifiedRec.ts);}
+        if(pendingLoveId!=null){
+            out.putString("love_photo_id",pendingLoveId);
+            out.putInt("love_photo_source",pendingLoveSource);
+            out.putString("love_photo_file",pendingLovePhoto==null?null:pendingLovePhoto.getAbsolutePath());
+        }
         super.onSaveInstanceState(out);
     }
     private long cardVisualGeneration;
@@ -1535,10 +1730,47 @@ public class CheckinActivity extends ThemedActivity {
 
     private void onMove(float dx, float dy) {
         if (dir == DIR_VERT) {
+            verticalFeedback(dy);
             Entry ent = entryAt(selected);
             if (ent != null && (ent.type == Entry.MEMORY || ent.type == Entry.QUIZ || ent.type == Entry.SUMMARY)) {
                 card.setTranslationY(dy * .2f);
                 hint(ent.type == Entry.SUMMARY ? T.s("上滑前往总结") : entryHandled(ent) ? T.s("目标已完成") : T.s("上滑前往学习页面"), ACCENT);
+                return;
+            }
+            if (ent != null && ent.type == Entry.TODO) {
+                // 待办卡两个方向都有效：上＝完成，下＝延时。和学习/冻结完全无关。
+                float up = Math.min(dy, 0f);
+                float down = Math.max(dy, 0f);
+                card.setTranslationY(dy);
+                float pUp = Math.min(1f, -up / upThreshold());
+                float pDown = Math.min(1f, down / downThreshold());
+                float p = Math.max(pUp, pDown);
+                if (cardMotion()) {
+                    card.setRotationX(-3f * pUp + 2f * pDown);
+                    card.setElevation(dp(16 + 8 * p));
+                }
+                if (ghost != null) {
+                    float s = 0.94f + 0.06f * p;
+                    ghost.setScaleX(s);
+                    ghost.setScaleY(s);
+                    ghost.setTranslationY(dp(12) * (1f - p));
+                    ghost.setAlpha(0.6f + 0.4f * p);
+                }
+                if (!busy) {
+                    if (p >= 1f && !thrFired) {
+                        thrFired = true;
+                        buzz(10);
+                    } else if (p < 1f) {
+                        thrFired = false;
+                    }
+                }
+                if (pUp >= 1f) {
+                    hint(T.s("松手，完成待办"), greenC);
+                } else if (pDown >= 1f) {
+                    hint(T.s("松手，设置延时"), redC);
+                } else {
+                    hint(T.s("↑ 完成待办   ↓ 延时提醒"), text2C);
+                }
                 return;
             }
             if (ent != null && ent.type == Entry.TABOO) {
@@ -1579,14 +1811,18 @@ public class CheckinActivity extends ThemedActivity {
                 }
                 return;
             }
-            // 目标白卡：往上推 = 打卡；往下的位移做重阻尼（不打就是不打，下滑没有含义）
+            // 目标白卡：往上推 = 打卡；开了「下滑按禁忌卡」的目标，下滑也有效。
             boolean done = entryHandled(ent);
+            boolean downTaboo = !done && ent != null && ent.type == Entry.GOAL
+                    && ent.goal != null && ent.goal.downTaboo;
             float up = Math.min(dy, 0f);
-            float down = Math.max(dy, 0f) * 0.2f;
+            float down = Math.max(dy, 0f) * (downTaboo ? 1f : 0.2f);
             float t = (up + down) * (done ? 0.2f : 1f);
             card.setTranslationY(t);
-            float p = done ? 0f : Math.min(1f, -up / upThreshold());
-            if (cardMotion()) { card.setRotationX(-3f * p); card.setElevation(dp(16 + 8 * p)); }
+            float pUp = done ? 0f : Math.min(1f, -up / upThreshold());
+            float pDown = downTaboo ? Math.min(1f, down / downThreshold()) : 0f;
+            float p = Math.max(pUp, pDown);
+            if (cardMotion()) { card.setRotationX(-3f * pUp + 2f * pDown); card.setElevation(dp(16 + 8 * p)); }
             // 上滑只推当前这张：不摆"下一张"跟上来（切不切目标由用户左右推决定）
             if (ghost != null) {
                 float s = 0.94f + 0.06f * p;
@@ -1605,8 +1841,15 @@ public class CheckinActivity extends ThemedActivity {
             }
             if (done) {
                 hint(T.s("已打卡 · 左右推换目标"), text3C);
+            } else if (pDown >= 1f) {
+                hint(T.s("松手，按禁忌认领"), redC);
+            } else if (pUp >= 1f) {
+                hint(ent != null && ent.type == Entry.LOVE
+                        ? T.s("松手，拍照并完成热爱") : T.s("松手，打卡"), greenC);
+            } else if (downTaboo) {
+                hint(T.s("↑ 打卡   ↓ 按禁忌认领"), ACCENT);
             } else {
-                hint(p >= 1f ? (ent!=null&&ent.type==Entry.LOVE?T.s("松手，完成热爱"):T.s("松手，打卡")) : "", p >= 1f ? greenC : ACCENT);
+                hint("", ACCENT);
             }
         } else {
             // 这个方向没有可换的目标（只有一个目标 / 该方向的都打完了）＝ 死路：
@@ -1658,6 +1901,17 @@ public class CheckinActivity extends ThemedActivity {
             if(ent!=null&&ent.type==Entry.LOVE){
                 if(!entryHandled(ent)&&(dy<=-upThreshold()||(vY < -flingX()&&dy < -dp(24))))claimLove(ent);else{dropPre();spring();}return;
             }
+            if (ent != null && ent.type == Entry.TODO) {
+                if (dy <= -upThreshold() || (vY < -flingX() && dy < -dp(24))) {
+                    completeTodo(ent);
+                } else if (dy >= downThreshold() || (vY > flingX() && dy > dp(24))) {
+                    deferTodo(ent);
+                } else {
+                    dropPre();
+                    spring();
+                }
+                return;
+            }
             if (ent != null && ent.type == Entry.TABOO) {
                 if (tabooClaimedToday(ent.taboo)) {
                     dropPre();
@@ -1678,6 +1932,10 @@ public class CheckinActivity extends ThemedActivity {
                 spring();   // 已打卡：竖推无效，直接弹回，连提示都不弹
             } else if (dy <= -upThreshold() || (vY < -flingX() && dy < -dp(24))) {
                 commit();   // 距离够或甩得够快 —— pre 留着给 commit 平移补位
+            } else if (ent != null && ent.type == Entry.GOAL && ent.goal != null
+                    && ent.goal.downTaboo
+                    && (dy >= downThreshold() || (vY > flingX() && dy > dp(24)))) {
+                claimGoalDownTaboo(ent);   // 下滑 = 按禁忌卡认领执行，但不记打卡
             } else {
                 dropPre();
                 spring();
@@ -1838,12 +2096,249 @@ public class CheckinActivity extends ThemedActivity {
 
     private void claimLove(Entry e){
         if(busy)return;
-        try{if(!CardStore.claim(this,e.love.optString("id"))){toast(T.s("今天已完成一张热爱卡"));refreshAsync();return;}}
-        catch(RuntimeException error){toast(error.getMessage());spring();return;}
+        launchLoveCamera(e.love.optString("id"),LOVE_SOURCE_CARD);
+    }
+
+    /** 完成页的可选入口：热爱卡不再每天进卡组，想领才点这里挑一张。 */
+    private void addLoveEntry() {
+        try {
+            CardData data = CardStore.snapshot(this);
+            java.util.List<String> ids = new java.util.ArrayList<>(), labels = new java.util.ArrayList<>();
+            for (int i = 0; i < data.love().length(); i++) {
+                org.json.JSONObject c = data.love().optJSONObject(i);
+                if (c != null && !c.optBoolean("archived")) {
+                    ids.add(c.optString("id"));
+                    labels.add(c.optString("title"));
+                }
+            }
+            if (ids.isEmpty()) return;
+            final boolean claimed = data.earnedToday(System.currentTimeMillis());
+            TextView entry = new TextView(this);
+            entry.setText(claimed ? T.s("今天的热爱已领取") : T.s("＋ 添加热爱卡"));
+            entry.setTextColor(claimed ? text2C : look.accent());
+            entry.setTextSize(15);
+            entry.setGravity(Gravity.CENTER);
+            entry.setPadding(dp(24), dp(16), dp(24), dp(16));
+            GradientDrawable bg = round(cardBg, dp(10));
+            bg.setStroke(dp(1), lineC);
+            entry.setBackground(bg);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.gravity = Gravity.CENTER;
+            LinearLayout empty=new LinearLayout(this);
+            empty.setOrientation(LinearLayout.VERTICAL);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(dp(24),dp(24),dp(24),dp(24));
+            TextView heading=new TextView(this);
+            heading.setText(T.s("打卡"));heading.setTextSize(24);heading.setTextColor(textC);
+            SwissTypography.role(heading,SwissTypography.Role.TITLE);
+            empty.addView(heading);
+            TextView date=new TextView(this);
+            date.setText(new java.text.SimpleDateFormat("M / d · EEEE",java.util.Locale.getDefault()).format(new java.util.Date()));
+            date.setTextSize(13);date.setTextColor(text2C);date.setPadding(0,dp(8),0,dp(24));
+            empty.addView(date);
+            empty.addView(entry);
+            stage.addView(empty, lp);
+            entry.setOnClickListener(v -> chooseLove(ids, labels, claimed));
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void chooseLove(java.util.List<String> ids, java.util.List<String> labels, boolean already) {
+        if (already) { toast(T.s("今天已完成一张热爱卡")); return; }
+        ThemeStore.dialog(this).setTitle(T.s("选择一张热爱卡"))
+                .setItems(labels.toArray(new String[0]), (d, w) -> claimLoveFromDone(ids.get(w)))
+                .setNegativeButton(T.s("取消"), null).show();
+    }
+
+    /** 从完成页直接领：台上没有卡，不走卡片滑动动画。 */
+    private void claimLoveFromDone(String id) {
+        if (busy) return;
+        launchLoveCamera(id, LOVE_SOURCE_DONE);
+    }
+
+    private void launchLoveCamera(String id,int source){
+        if(busy)return;
+        if(id==null||id.isEmpty()){toast(T.s("热爱卡数据已失效"));return;}
+        File dir=LovePhotoProvider.dir(this);
+        if(!dir.isDirectory()&&!dir.mkdirs()){toast(T.s("照片目录无法创建，请重试"));return;}
+        File photo=new File(dir,java.util.UUID.randomUUID().toString()+".jpg");
+        try{if(!photo.createNewFile())throw new java.io.IOException();}
+        catch(Exception error){toast(T.s("照片文件无法创建，请重试"));return;}
+        Uri target=LovePhotoProvider.uri(this,photo);
+        Intent camera=new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        camera.putExtra(MediaStore.EXTRA_OUTPUT,target);
+        camera.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        pendingLoveId=id;pendingLoveSource=source;pendingLovePhoto=photo;busy=true;
+        try{startActivityForResult(camera,RC_LOVE_PHOTO);}
+        catch(ActivityNotFoundException error){
+            clearPendingLovePhoto();photo.delete();busy=false;
+            toast(T.s("没有可用的相机，无法领取热爱券"));
+        }
+        catch(RuntimeException error){
+            clearPendingLovePhoto();photo.delete();busy=false;
+            toast(T.s("相机无法打开，请重试"));
+        }
+    }
+
+    private void clearPendingLovePhoto(){
+        pendingLoveId=null;pendingLoveSource=0;pendingLovePhoto=null;
+    }
+
+    private String saveLoveThumbnail(Bitmap bitmap)throws Exception{
+        File dir=LovePhotoProvider.dir(this);
+        if(!dir.isDirectory()&&!dir.mkdirs())throw new java.io.IOException();
+        File out=new File(dir,java.util.UUID.randomUUID().toString()+".jpg");
+        try(FileOutputStream stream=new FileOutputStream(out)){
+            if(!bitmap.compress(Bitmap.CompressFormat.JPEG,90,stream))throw new java.io.IOException();
+        }
+        if(out.length()<=0L){out.delete();throw new java.io.IOException();}
+        return out.getAbsolutePath();
+    }
+
+    private void deleteLovePhoto(String path){
+        if(path==null||path.trim().isEmpty())return;
+        try{new File(path).delete();}catch(RuntimeException ignored){}
+    }
+
+    private void completeLoveClaim(String id,int source,String photoPath){
+        if(id==null||id.isEmpty()){
+            deleteLovePhoto(photoPath);busy=false;toast(T.s("热爱卡数据已失效"));return;
+        }
+        if(source==LOVE_SOURCE_DONE){
+            try{
+                if(!CardStore.claim(this,id,photoPath)){
+                    deleteLovePhoto(photoPath);busy=false;toast(T.s("这张卡今天已攒过券"));refreshAsync();return;
+                }
+            }catch(RuntimeException error){
+                deleteLovePhoto(photoPath);busy=false;toast(error.getMessage());return;
+            }
+            busy=false;syncGuard();
+            ThemeStore.dialog(this).setTitle(T.s("已拍照并攒一张热爱券"))
+                    .setMessage(T.s("照片只保存在本机。领取满 24 小时后才能在卡管理使用；用一张立刻解冻时段冻结。"))
+                    .setPositiveButton(T.s("收下"), null).show();
+            refreshAsync();
+            return;
+        }
+        try{
+            if(!CardStore.claim(this,id,photoPath)){
+                deleteLovePhoto(photoPath);busy=false;toast(T.s("这张卡今天已攒过券"));refreshAsync();return;
+            }
+        }catch(RuntimeException error){
+            deleteLovePhoto(photoPath);busy=false;toast(error.getMessage());spring();return;
+        }
         busy=true;dropPre();final View completed=card;syncGuard();
-        org.json.JSONArray earned=CardStore.snapshot(this).earned();int prize=earned.optJSONObject(earned.length()-1).optInt("minutes");
-        ThemeStore.dialog(this).setTitle(T.s("热爱抽奖 · ")+prize+T.s(" 分钟")).setMessage(T.s("奖励已存入余额，将自动抵扣后续定时冻结。每天只能抽取一次。")).setPositiveButton(T.s("收下"),null).show();
-        Runnable after=()->{busy=false;selected=-1;refreshAsync();enterFromUp();};if(completed!=null)dismissCardUp(completed,after);else after.run();
+        ThemeStore.dialog(this).setTitle(T.s("已拍照并攒一张热爱券"))
+                .setMessage(T.s("照片只保存在本机。领取满 24 小时后才能在卡管理使用。"))
+                .setPositiveButton(T.s("收下"),null).show();
+        Runnable after=()->{busy=false;selected=-1;refreshAsync();enterFromUp();};
+        if(completed!=null)dismissCardUp(completed,after);else after.run();
+    }
+
+    /* ==================== 待办卡：完成 / 取消 ==================== */
+
+    /** 上滑：把这条待办标成完成。只改待办自己的状态，不碰学习进度与冻结。 */
+    private void completeTodo(final Entry e) {
+        if (busy || e == null || e.type != Entry.TODO || e.todo == null || entryAt(selected) != e) {
+            dropPre();
+            spring();
+            return;
+        }
+        try {
+            if (!TodoStore.complete(this, e.todo.id, System.currentTimeMillis())) {
+                toast(T.s("这条待办已经处理过"));
+                refreshAsync();
+                return;
+            }
+        } catch (RuntimeException error) {
+            toast(error.getMessage() == null ? T.s("待办没能完成") : error.getMessage());
+            spring();
+            return;
+        }
+        TodoReminder.cancel(this, e.todo.id);
+        busy = true;
+        dropPre();
+        buzz(24);
+        toast(T.s("待办已完成"));
+        final View completed = card;
+        Runnable after = () -> {
+            busy = false;
+            selected = -1;
+            refreshAsync();
+            enterFromUp();
+        };
+        if (completed != null) {
+            dismissCardUp(completed, after);
+        } else {
+            after.run();
+        }
+    }
+
+    /** 下滑只调整提醒时间，取消输入不写入。 */
+    private void deferTodo(final Entry e) {
+        if(busy||e==null||e.todo==null||entryAt(selected)!=e){spring();return;}
+        dropPre();spring();busy=true;
+        final EditText minutes=new EditText(this);
+        minutes.setInputType(InputType.TYPE_CLASS_NUMBER);
+        minutes.setSingleLine(true);
+        minutes.setText(String.valueOf(getSharedPreferences("afs_todo",0).getInt("defer_minutes",30)));
+        minutes.selectAll();minutes.setHint(T.s("分钟"));
+        final long[] customAt={0};
+        final TextView custom=look.sub(T.s("自定义时间"));
+        custom.setGravity(Gravity.CENTER);custom.setPadding(0,dp(12),0,dp(12));
+        custom.setTextColor(ACCENT);custom.setContentDescription(T.s("自定义时间"));
+        LinearLayout content=new LinearLayout(this);content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(24),dp(8),dp(24),0);content.addView(minutes);
+        LinearLayout presets=new LinearLayout(this);
+        for(int value:new int[]{15,30,60}){
+            TextView choice=look.sub(value+T.s(" 分钟"));choice.setGravity(Gravity.CENTER);choice.setPadding(0,dp(16),0,dp(16));
+            choice.setOnClickListener(v->{customAt[0]=0;minutes.setEnabled(true);minutes.setText(String.valueOf(value));custom.setText(T.s("自定义时间"));});
+            presets.addView(choice,new LinearLayout.LayoutParams(0,-2,1));
+        }
+        content.addView(presets);
+        content.addView(custom);
+        custom.setOnClickListener(v->pickDeferTime(customAt,custom,minutes));
+        final boolean[] accepted={false};
+        AlertDialog dialog=ThemeStore.dialog(this).setTitle(T.s("延时提醒"))
+            .setView(content).setNegativeButton(T.s("取消"),null)
+            .setPositiveButton(T.s("确定"),null).create();
+        deferDialog=dialog;
+        dialog.setOnDismissListener(d->{deferDialog=null;if(!accepted[0]){busy=false;spring();}});
+        dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            long value;
+            try{value=customAt[0]>0?0:Long.parseLong(minutes.getText().toString().trim());if(customAt[0]==0&&(value<1||value>525600))throw new NumberFormatException();}
+            catch(NumberFormatException error){minutes.setError(T.s("请输入 1–525600 分钟"));return;}
+            TodoStore.Todo next;
+            if(customAt[0]>0&&customAt[0]<=System.currentTimeMillis()){toast(T.s("请选择未来的时间"));return;}
+            try{next=customAt[0]>0?TodoStore.postponeUntil(this,e.todo.id,customAt[0],System.currentTimeMillis()):TodoStore.postpone(this,e.todo.id,value,System.currentTimeMillis());}
+            catch(RuntimeException error){minutes.setError(error.getMessage());return;}
+            if(next==null){minutes.setError(T.s("待办未保存，请重试"));return;}
+            accepted[0]=true;dialog.dismiss();
+            if(customAt[0]==0)getSharedPreferences("afs_todo",0).edit().putInt("defer_minutes",(int)value).apply();
+            TodoReminder.cancel(this,next.id);TodoReminder.schedule(this,next);
+            buzz(10);toast(T.s("已延时提醒"));
+            Runnable after=()->{busy=false;selected=-1;refreshAsync();enterFromVertical(1);};
+            if(card!=null)dismissCardVertical(card,1,after);else after.run();
+        }));
+        dialog.show();
+    }
+
+    private void pickDeferTime(long[] selected,TextView label,EditText minutes){
+        final java.util.Calendar date=java.util.Calendar.getInstance();
+        date.setTimeInMillis(selected[0]>0?selected[0]:System.currentTimeMillis()+30*60000L);
+        android.app.DatePickerDialog picker=new android.app.DatePickerDialog(this,(view,year,month,day)->{
+            date.set(year,month,day);
+            android.app.TimePickerDialog time=new android.app.TimePickerDialog(this,(clock,hour,minute)->{
+                date.set(java.util.Calendar.HOUR_OF_DAY,hour);date.set(java.util.Calendar.MINUTE,minute);
+                date.set(java.util.Calendar.SECOND,0);date.set(java.util.Calendar.MILLISECOND,0);
+                if(date.getTimeInMillis()<=System.currentTimeMillis()){toast(T.s("请选择未来的时间"));return;}
+                selected[0]=date.getTimeInMillis();minutes.setEnabled(false);
+                label.setText(new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm",java.util.Locale.getDefault()).format(date.getTime()));
+            },date.get(java.util.Calendar.HOUR_OF_DAY),date.get(java.util.Calendar.MINUTE),true);
+            deferTimePicker=time;time.show();
+        },date.get(java.util.Calendar.YEAR),date.get(java.util.Calendar.MONTH),date.get(java.util.Calendar.DAY_OF_MONTH));
+        picker.getDatePicker().setMinDate(System.currentTimeMillis());
+        deferTimePicker=picker;picker.show();
     }
 
     /* ==================== 禁忌卡：认领 / 没做 ==================== */
@@ -1909,40 +2404,84 @@ public class CheckinActivity extends ThemedActivity {
                 int nx = nextPendingCardFrom(selected);
                 selected = nx >= 0 ? nx : firstPendingCard();
                 render(false);
-                enterFromUp();
+                enterFromVertical(1);
             }
         };
         if (c == null) {
             after.run();
             return;
         }
-        c.animate().translationY(stageHeight()).alpha(0.35f)
-                .setInterpolator(Motion.IN)
-                .setDuration(MotionPolicy.duration(CheckinActivity.this,Motion.EXIT))
-                .withEndAction(after).start();
+        dismissCardVertical(c,1,after);
     }
 
-    /** 真正落一笔认领：延长冻结 + 流水 + 立刻让守卫按新惩罚期重算。 */
+    /** 真正落一笔认领：按当前开关执行惩罚 + 流水 + 立刻让守卫重算。 */
     private void performTabooClaim(String name) {
-        int min = tabooPenaltyMin(this);
+        performTabooClaim(name, name, false);
+    }
+
+    /**
+     * @param logName  写进禁忌流水的名字（目标下滑带前缀，避免和真实禁忌项混淆）
+     * @param shown    提示里展示的名字
+     * @param goalDown true = 目标卡下滑，提示用「下滑」而不是「认领」
+     */
+    private void performTabooClaim(String logName, String shown, boolean goalDown) {
         long now = System.currentTimeMillis();
-        StudyGate.extendTaboo(this, min * 60_000L, now);
-        StudyGate.recordTabooClaim(this, name, now);
-        long until = StudyGate.tabooUntil(this);
+        TabooPenalty.Result result = TabooPenalty.apply(this, now);
+        StudyGate.recordTabooClaim(this, logName, now);
         buzz(24);
-        toast(T.s("认领「") + name + T.s("」· 各应用冻结结束后追加 ") + min + T.s(" 分钟"));
-        android.util.Log.i(Guard.TAG, "taboo claim: " + name + " +" + min
-                + "min → until=" + until);
+        toast((goalDown ? T.f("下滑「%s」· %s", shown, result.freezeText())
+                : T.f("认领「%s」· %s", shown, result.freezeText())) + result.quotaText());
+        android.util.Log.i(Guard.TAG, "taboo claim: " + logName + " freeze=" + result.freeze
+                + " quota=" + result.quota + " +" + result.minutes + "min, quota cells="
+                + result.quotaCells + " → until=" + result.until);
         syncGuard();
+    }
+
+    /**
+     * 目标卡下滑：走和禁忌卡认领完全相同的惩罚入口（同一分钟数、同一冻结/限额开关），
+     * 但**不写打卡记录** —— 这张目标今天只算"已处理"，进度和 pendingToday 都不动。
+     */
+    private void claimGoalDownTaboo(final Entry e) {
+        if (busy || e == null || e.type != Entry.GOAL || e.goal == null
+                || entryAt(selected) != e || !e.goal.downTaboo || e.goal.hit()
+                || StudyStore.downHandledToday(this, e.goal.id)) {
+            dropPre();
+            spring();
+            return;
+        }
+        busy = true;
+        final Goal goal = e.goal;
+        StudyStore.markDownHandled(this, goal.id, System.currentTimeMillis());
+        performTabooClaim(T.s("目标下滑：") + goal.name, goal.name, true);
+
+        final View c = card;
+        final View in = pre;
+        pre = null;
+        preIndex = -1;
+        if (in != null) {
+            stage.removeView(in);
+        }
+        Runnable after = new Runnable() {
+            public void run() {
+                busy = false;
+                int nx = nextPendingCardFrom(selected);
+                selected = nx >= 0 ? nx : firstPendingCard();
+                render(false);
+                enterFromVertical(1);
+            }
+        };
+        if (c == null) {
+            after.run();
+            return;
+        }
+        dismissCardVertical(c, 1, after);
     }
 
     /** 长按黑卡：一天犯两次忌（两顿辣）时再认一次，叠加。 */
     private void askClaimTabooAgain(final String name) {
-        final int min = tabooPenaltyMin(this);
         ThemeStore.dialog(this)
                 .setTitle(T.s("再认一次"))
-                .setMessage(T.s("「") + name + T.s("」今天再认一次？\n\n冻结再延长 ")
-                        + min + T.s(" 分钟（叠加）。"))
+                .setMessage(T.f("「%s」今天再认一次？\n\n本次：%s（都会叠加）。", name, tabooPenaltySummary(this)))
                 .setPositiveButton(T.s("认了"), new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {
                         performTabooClaim(name);
@@ -1954,15 +2493,29 @@ public class CheckinActivity extends ThemedActivity {
     }
 
     /** 整张卡沿手势方向上移离场，下层卡片接位。 */
+    private void verticalFeedback(float dy){
+        if(!cardMotion()||card==null)return;
+        float progress=Math.min(1f,Math.abs(dy)/(dy<0?upThreshold():downThreshold()));
+        card.setScaleX(1f-.045f*progress);card.setScaleY(1f-.045f*progress);
+        card.setAlpha(1f-.12f*progress);
+        card.setRotationX((dy<0?-1:1)*4f*progress);
+    }
+
     private void dismissCardUp(final View v,final Runnable end) {
+        dismissCardVertical(v,-1,end);
+    }
+    private void dismissCardVertical(final View v,int direction,final Runnable end){
         stopHover();final long generation=++cardVisualGeneration;
         if(!cardMotion()){end.run();return;}
         v.animate().setListener(null).withEndAction(null).cancel();
-        v.animate().translationY(-stageHeight()).alpha(.25f)
+        v.animate().translationY(direction*stageHeight()).alpha(.15f)
+            .scaleX(.92f).scaleY(.92f).rotationX(direction*7f)
             .setInterpolator(Motion.IN).setDuration(MotionPolicy.duration(this,Motion.EXIT))
             .withEndAction(()->{if(generation==cardVisualGeneration&&card==v&&!isFinishing()&&!isDestroyed())end.run();}).start();
     }
 
+    private AlertDialog deferDialog;
+    private android.app.Dialog deferTimePicker;
     private AlertDialog dlg;                     // 字体颜色弹窗
     private android.app.Dialog tabooDialog;
     private View tabooPage;
@@ -2213,15 +2766,18 @@ public class CheckinActivity extends ThemedActivity {
                 .show();
     }
 
-    private void enterFromUp() {
+    private void enterFromUp() {enterFromVertical(-1);}
+
+    private void enterFromVertical(int exitDirection) {
         if (card == null) {
             return;
         }
         if (!cardMotion()) return;
-        card.setTranslationY(dp(32));
-        card.setScaleX(.98f); card.setScaleY(.98f);
+        card.setTranslationY(-exitDirection*dp(96));
+        card.setRotationX(-exitDirection*4f);
+        card.setScaleX(.94f); card.setScaleY(.94f);
         card.setAlpha(.65f);
-        card.animate().translationY(0).alpha(1f).scaleX(1f).scaleY(1f)
+        card.animate().translationY(0).alpha(1f).scaleX(1f).scaleY(1f).rotationX(0)
                 .setInterpolator(Motion.OUT)
                 .setDuration(MotionPolicy.duration(CheckinActivity.this,Motion.ENTER)).start();
     }
@@ -2426,6 +2982,11 @@ public class CheckinActivity extends ThemedActivity {
         goals.clear();
         goals.addAll(StudyStore.uiGoals(this));
         rebuildCards();
+        try {
+            todoDueSignature = TodoStore.dueSignature(TodoStore.all(this), System.currentTimeMillis());
+        } catch (RuntimeException ignored) {
+            todoDueSignature = "";
+        }
         int idx = queueIndexOfGoal(keepId);
         selected = idx >= 0 ? idx : firstPendingCard();
         render(false, false);
@@ -2437,23 +2998,34 @@ public class CheckinActivity extends ThemedActivity {
         if (memoryProgress != null && memoryProgress.selected && !memoryProgress.complete()) gp++;
         if (quizProgress != null && quizProgress.selected && !quizProgress.complete()) gp++;
         gp+=CardStore.summariesPending(this,System.currentTimeMillis()).size();
-        if(cardData!=null&&!cardData.earnedToday(System.currentTimeMillis())){for(int i=0;i<cardData.love().length();i++)if(!cardData.love().optJSONObject(i).optBoolean("archived")){gp++;break;}}
+        // 热爱卡不计入待办：不必每天领，完成页里可选添加。
         int tp = 0;
         for (String s : tabooItems(this)) {
             if (!tabooClaimedToday(s) && !tabooDeclinedToday(s)) {
                 tp++;
             }
         }
-        if (gp + tp == 0) {
+        int dp = 0;
+        try {
+            dp = TodoStore.due(TodoStore.all(this), System.currentTimeMillis()).size();
+        } catch (RuntimeException ignored) {
+        }
+        if (gp + tp + dp == 0) {
             return T.s("今天的卡都处理完了");
         }
-        if (gp == 0) {
-            return T.s("禁忌卡待确认 ") + tp + T.s(" 张");
+        StringBuilder line = new StringBuilder();
+        if (gp > 0) {
+            line.append(T.s("还有 ")).append(gp).append(T.s(" 个待打卡"));
         }
-        if (tp == 0) {
-            return T.s("还有 ") + gp + T.s(" 个待打卡");
+        if (tp > 0) {
+            if (line.length() > 0) line.append(" · ");
+            line.append(T.s("禁忌 ")).append(tp).append(T.s(" 张"));
         }
-        return T.s("还有 ") + gp + T.s(" 个待打卡 · 禁忌 ") + tp + T.s(" 张");
+        if (dp > 0) {
+            if (line.length() > 0) line.append(" · ");
+            line.append(T.s("待办 ")).append(dp).append(T.s(" 张"));
+        }
+        return line.toString();
     }
 
     /* ==================== 杂项 ==================== */
@@ -2497,9 +3069,24 @@ public class CheckinActivity extends ThemedActivity {
         tabooSp(c).edit().putString("items", a.toString()).apply();
     }
 
-    /** 每次认领延长多少分钟（默认 60）。 */
+    /** 每次认领延长多少分钟（默认 30）。 */
     private static int tabooPenaltyMin(Context c) {
-        return tabooSp(c).getInt("penalty_min", PenaltyStore.DEFAULT_TABOO_MIN);
+        return TabooPenalty.minutes(c);
+    }
+
+    /** 认领禁忌卡时是否执行冻结延长；旧数据默认开启，保持原行为。 */
+    private static boolean tabooFreezePenaltyEnabled(Context c) {
+        return TabooPenalty.freezeEnabled(c);
+    }
+
+    /** 认领禁忌卡时是否扣减当天时间限额；旧数据默认开启，保持原行为。 */
+    private static boolean tabooQuotaPenaltyEnabled(Context c) {
+        return TabooPenalty.quotaEnabled(c);
+    }
+
+    /** 把两个开关的当前状态压成一句人话，用于卡面和确认框。 */
+    private static String tabooPenaltySummary(Context c) {
+        return TabooPenalty.summary(c);
     }
 
     private static String hmOf(long ms) {
@@ -2507,6 +3094,13 @@ public class CheckinActivity extends ThemedActivity {
         u.setTimeInMillis(ms);
         return String.format("%02d:%02d",
                 u.get(Calendar.HOUR_OF_DAY), u.get(Calendar.MINUTE));
+    }
+
+    private static String hmsOf(long ms) {
+        Calendar u = Calendar.getInstance();
+        u.setTimeInMillis(ms);
+        return String.format("%02d:%02d:%02d",
+                u.get(Calendar.HOUR_OF_DAY), u.get(Calendar.MINUTE), u.get(Calendar.SECOND));
     }
 
     /** 禁忌卡管理页：逐张显示状态，认领和设置分开。 */
@@ -2559,7 +3153,7 @@ public class CheckinActivity extends ThemedActivity {
         count.setTextColor(pending == 0 ? look.green() : look.red());
         overview.addView(count);
         TextView summary = look.sub(holding
-                ? T.s("冻结已延长至 ") + hmOf(until)
+                ? T.s("延时冻结生效中 · 实际结束于 ") + hmsOf(until)
                 : (until>System.currentTimeMillis()?T.s("已安排待接续罚时，各应用时间见冻结页"):T.s("当前没有禁忌卡带来的延长冻结")));
         LinearLayout.LayoutParams sumLp = new LinearLayout.LayoutParams(-1, -2);
         sumLp.topMargin = dp(6);
@@ -2615,7 +3209,7 @@ public class CheckinActivity extends ThemedActivity {
             nameLp.topMargin = dp(10);
             card.addView(nameText, nameLp);
             TextView state = new TextView(this);
-            state.setText(claimed ? T.s("今天已认领 · 冻结已延长") : declined ? T.s("今天没做 · 无额外冻结") : T.s("今天还未确认"));
+            state.setText(claimed ? T.s("今天已认领 · 按认领时开关执行") : declined ? T.s("今天没做 · 无额外冻结") : T.s("今天还未确认"));
             state.setTextColor(claimed ? RED_D : declined ? GREEN_D : TABOO_TEXT2);
             state.setTextSize(13);
             LinearLayout.LayoutParams stateLp = new LinearLayout.LayoutParams(-1, -2);
@@ -2662,10 +3256,31 @@ public class CheckinActivity extends ThemedActivity {
         rulesLp.topMargin = dp(26);
         rulesLp.bottomMargin = dp(10);
         box.addView(rules, rulesLp);
-        manageOption(box, T.s("认领一次延长冻结"), tabooPenaltyMin(this) + T.s(" 分钟 · 点此修改"),
+        final boolean penaltyEditable = DailyQuotaStore.editable(this);
+        manageOption(box, T.s("认领惩罚时长"), T.f("%d 分钟 · 冻结与限额共用", tabooPenaltyMin(this)),
                 new View.OnClickListener() {
                     public void onClick(View v) { askTabooPenalty(); }
                 });
+        LinearLayout manual = look.card(14f, 13f);
+        LinearLayout.LayoutParams manualLp = new LinearLayout.LayoutParams(-1, -2);
+        manualLp.bottomMargin = dp(8);
+        box.addView(manual, manualLp);
+        TextView caption = look.sub(T.s("认领时生效"));
+        caption.setTextSize(15);
+        caption.setTextColor(look.text());
+        caption.setTypeface(Typeface.DEFAULT_BOLD);
+        manual.addView(caption);
+        manual.addView(look.sub(penaltyEditable
+                ? T.s("开关只决定之后认领时是否执行，不会立即改动当前时长。")
+                : T.f("现在只能查看。开关和时长只在调整时段 %s 内修改。", TimeWindow.label(this))));
+        final TextView preview = look.sub(T.f("下次认领：%s", tabooPenaltySummary(this)));
+        preview.setTextSize(13);
+        preview.setPadding(0, dp(8), 0, 0);
+        manual.addView(preview);
+        addTabooPenaltySwitch(manual, T.s("延长冻结时段"), T.f("%d 分钟", tabooPenaltyMin(this)),
+                "taboo_switch_freeze", tabooFreezePenaltyEnabled(this), "penalty_freeze", penaltyEditable, preview);
+        addTabooPenaltySwitch(manual, T.s("减少时间限额"), T.f("%d 分钟", tabooPenaltyMin(this)),
+                "taboo_switch_quota", tabooQuotaPenaltyEnabled(this), "penalty_quota", penaltyEditable, preview);
         // 打卡那条规则只在旁边说明，不在这里改：它和打卡完成度绑定，改数字会让人以为能关掉
         LinearLayout checkinRule = look.card(14f, 13f);
         LinearLayout.LayoutParams checkinLp = new LinearLayout.LayoutParams(-1, -2);
@@ -2724,11 +3339,9 @@ public class CheckinActivity extends ThemedActivity {
 
     /** 认领禁忌卡：确认后冻结立刻延长一段惩罚时长。 */
     private void claimTaboo(final String name) {
-        final int min = tabooPenaltyMin(this);
         ThemeStore.dialog(this)
                 .setTitle(T.s("认领禁忌卡"))
-                .setMessage(T.s("「") + name + T.s("」认领一次？\n\n冻结程序将延长 ")
-                        + min + T.s(" 分钟（可叠加）。"))
+                .setMessage(T.f("「%s」认领一次？\n\n本次：%s（可叠加）。", name, tabooPenaltySummary(this)))
                 .setPositiveButton(T.s("认了"), new android.content.DialogInterface.OnClickListener() {
                     public void onClick(android.content.DialogInterface d, int w) {
                         performTabooClaim(name);
@@ -2787,6 +3400,10 @@ public class CheckinActivity extends ThemedActivity {
     }
 
     private void askTabooPenalty() {
+        if (!DailyQuotaStore.editable(this)) {
+            toast(T.f("认领惩罚设置只在调整时段 %s 内修改", TimeWindow.label(this)));
+            return;
+        }
         final EditText et = new EditText(this);
         et.setInputType(InputType.TYPE_CLASS_NUMBER);
         et.setHint(T.s("分钟数，如 30、60、120"));
@@ -2920,6 +3537,13 @@ public class CheckinActivity extends ThemedActivity {
             LinearLayout.LayoutParams amountLp = new LinearLayout.LayoutParams(-1, -2);
             amountLp.topMargin = dp(10);
             goalCard.addView(amount, amountLp);
+            TextView downSetting = look.sub(g.downTaboo
+                    ? T.s("下滑：按禁忌卡认领执行")
+                    : T.s("下滑：无动作"));
+            downSetting.setTextColor(g.downTaboo ? look.accent() : look.text3());
+            LinearLayout.LayoutParams downLp = new LinearLayout.LayoutParams(-1, -2);
+            downLp.topMargin = dp(4);
+            goalCard.addView(downSetting, downLp);
             goalCard.setOnClickListener(new View.OnClickListener() {
                 public void onClick(View v) {
                     manageOne(g.id);
@@ -3018,6 +3642,41 @@ public class CheckinActivity extends ThemedActivity {
                 }
             }
         });
+    }
+
+    /** 禁忌惩罚开关：只保存「之后认领是否执行」，不会立刻改冻结或限额。 */
+    private void addTabooPenaltySwitch(LinearLayout parent, String title, String detail,
+                                       String tag, boolean checked, final String prefKey,
+                                       boolean editable, final TextView preview) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, -2);
+        rowLp.topMargin = dp(10);
+        parent.addView(row, rowLp);
+        TextView labels = new TextView(this);
+        labels.setText(title + "\n" + detail);
+        labels.setTextColor(look.text());
+        labels.setTextSize(14);
+        labels.setLineSpacing(dp(3), 1f);
+        labels.setAlpha(editable ? 1f : 0.55f);
+        row.addView(labels, new LinearLayout.LayoutParams(0, -2, 1f));
+        android.widget.Switch toggle = new android.widget.Switch(this);
+        toggle.setTag(tag);
+        toggle.setChecked(checked);
+        toggle.setContentDescription(title);
+        toggle.setEnabled(editable);
+        toggle.setAlpha(editable ? 1f : 0.55f);
+        toggle.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(android.widget.CompoundButton buttonView, boolean isChecked) {
+                tabooSp(CheckinActivity.this).edit().putBoolean(prefKey, isChecked).apply();
+                if (preview != null) {
+                    preview.setText(T.f("下次认领：%s", tabooPenaltySummary(CheckinActivity.this)));
+                }
+                render(false);
+            }
+        });
+        row.addView(toggle);
     }
 
     private TextView manageButton(String title, int bgColor, int textColor) {
@@ -3156,6 +3815,20 @@ public class CheckinActivity extends ThemedActivity {
         box.addView(unit);
         box.addView(total);
         box.addView(due);
+        final android.widget.CheckBox downTaboo = new android.widget.CheckBox(this);
+        downTaboo.setText(T.s("下滑按禁忌卡认领处理"));
+        downTaboo.setTextSize(15);
+        downTaboo.setTextColor(DLG_TEXT);
+        downTaboo.setPadding(0, dp(12), 0, 0);
+        downTaboo.setChecked(old != null && old.downTaboo);
+        box.addView(downTaboo);
+        TextView downHint = new TextView(this);
+        downHint.setText(T.s("开启后，下滑这张目标卡会延长冻结并按开关减少时间限额；不会记为已打卡。"));
+        downHint.setTextSize(12);
+        downHint.setTextColor(DLG_TEXT2);
+        downHint.setLineSpacing(dp(3), 1f);
+        downHint.setPadding(0, dp(4), 0, dp(8));
+        box.addView(downHint);
 
         if (old != null) {
             name.setText(old.name);
@@ -3192,6 +3865,7 @@ public class CheckinActivity extends ThemedActivity {
                         g.total = t;
                         String dd = due.getText().toString().trim();
                         g.due = dd.isEmpty() ? StudyStore.plusDays(30) : dd;
+                        g.downTaboo = downTaboo.isChecked();
                         StudyStore.upsert(CheckinActivity.this, g);
                         refreshAsync();
                         reopenManage();
@@ -3289,6 +3963,31 @@ public class CheckinActivity extends ThemedActivity {
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if(req==RC_LOVE_PHOTO){
+            String id=pendingLoveId;int source=pendingLoveSource;File photo=pendingLovePhoto;
+            clearPendingLovePhoto();
+            String photoPath=null;
+            if(res==RESULT_OK){
+                if(photo!=null&&photo.isFile()&&photo.length()>0L)photoPath=photo.getAbsolutePath();
+                else if(data!=null){
+                    Bitmap thumbnail=data.getParcelableExtra("data");
+                    if(thumbnail!=null){
+                        try{photoPath=saveLoveThumbnail(thumbnail);}
+                        catch(Exception ignored){photoPath=null;}
+                    }
+                }
+            }
+            if(photoPath!=null){
+                if(photo!=null&&!photoPath.equals(photo.getAbsolutePath()))photo.delete();
+                completeLoveClaim(id,source,photoPath);
+                return;
+            }
+            if(photo!=null)photo.delete();
+            busy=false;
+            toast(res==RESULT_OK?T.s("相机里没有拿到照片，请重拍"):T.s("未拍照，未领取热爱券"));
+            spring();
+            return;
+        }
         if (req == RC_BG) {
             if (res == RESULT_OK && data != null && data.getData() != null) {
                 String err = Backdrop.importImage(this, data.getData());
@@ -3400,13 +4099,20 @@ public class CheckinActivity extends ThemedActivity {
         for (int i = 0; i < goals.size(); i++) {
             cards.add(new Entry(Entry.GOAL, null, goals.get(i), i));
         }
+        try {
+            for (TodoStore.Todo todo : TodoStore.due(TodoStore.all(this), System.currentTimeMillis())) {
+                cards.add(new Entry(todo));
+            }
+        } catch (RuntimeException error) {
+            android.util.Log.w(Guard.TAG, "Todo cards unavailable", error);
+        }
         memoryProgress = LearningLink.memory(this);
         if (memoryProgress.available && memoryProgress.selected) cards.add(new Entry(Entry.MEMORY, null, null, -1));
         quizProgress = LearningLink.quiz(this);
         if (quizProgress.available && quizProgress.selected) cards.add(new Entry(Entry.QUIZ, null, null, -1));
         try{
             cardData=CardStore.snapshot(this);long now=System.currentTimeMillis();
-            for(int i=0;i<cardData.love().length();i++){JSONObject love=cardData.love().optJSONObject(i);if(!love.optBoolean("archived"))cards.add(new Entry(love));}
+            // 热爱卡不再每天进卡组：完成页里由用户选择添加，见 addLoveEntry()。
             CycleSummary summary=cardData.summary(now);for(CycleSummary.Period pending:summary.allPending(now))cards.add(new Entry(pending));
             if(completionAnimation!=null&&completionAnimation.startsWith("summary:")){CycleSummary.Period completed=summary.recorded(completionAnimation.substring(8));if(completed!=null)cards.add(new Entry(completed));}
         }catch(RuntimeException error){cardData=null;android.util.Log.w(Guard.TAG,"Card settings unavailable",error);}
@@ -3425,6 +4131,7 @@ public class CheckinActivity extends ThemedActivity {
         if (e.type == Entry.QUIZ) return "quiz";
         if (e.type == Entry.SUMMARY) return "summary:"+e.summary.key;
         if (e.type == Entry.LOVE) return "love:"+e.love.optString("id");
+        if (e.type == Entry.TODO) return e.todo == null ? null : "todo:"+e.todo.id;
         return e.type == Entry.TABOO ? "T:" + e.taboo : "G:" + e.goal.id;
     }
 
@@ -3449,10 +4156,11 @@ public class CheckinActivity extends ThemedActivity {
         if (e.type == Entry.QUIZ) return quizProgress.complete();
         if (e.type == Entry.SUMMARY) return e.summary.complete;
         if (e.type == Entry.LOVE) return cardData!=null&&cardData.claimed(e.love.optString("id"),System.currentTimeMillis());
+        if (e.type == Entry.TODO) return e.todo == null || !e.todo.pending();
         return e.goal != null && e.goal.hit();
     }
 
-    /** 今天处理过了（认了 / 明确没做 / 目标已打卡）—— 轮换时跳过。 */
+    /** 今天处理过了（认了 / 明确没做 / 目标已打卡 / 目标下滑按禁忌卡处理过）—— 轮换时跳过。 */
     private boolean entryHandled(Entry e) {
         if (e == null) {
             return true;
@@ -3464,7 +4172,9 @@ public class CheckinActivity extends ThemedActivity {
         if (e.type == Entry.QUIZ) return quizProgress.complete();
         if (e.type == Entry.SUMMARY) return e.summary.complete;
         if (e.type == Entry.LOVE) return cardData!=null&&cardData.earnedToday(System.currentTimeMillis());
-        return e.goal != null && e.goal.hit();
+        if (e.type == Entry.TODO) return e.todo == null || !e.todo.pending();
+        return e.goal != null && (e.goal.hit()
+                || (e.goal.downTaboo && StudyStore.downHandledToday(this, e.goal.id)));
     }
 
     /** 今天还没处理完的卡张数（禁忌待确认 + 目标待打卡）。 */
@@ -3541,7 +4251,7 @@ public class CheckinActivity extends ThemedActivity {
     private int pending() {
         int n = 0;
         for (Goal g : goals) {
-            if (!g.hit()) {
+            if (!g.hit() && !(g.downTaboo && StudyStore.downHandledToday(this, g.id))) {
                 n++;
             }
         }
@@ -3696,7 +4406,11 @@ public class CheckinActivity extends ThemedActivity {
     private GradientDrawable round(int color, int radius) {
         GradientDrawable d = new GradientDrawable();
         d.setColor(color);
-        d.setCornerRadius(radius);
+        // 自绘的圆角也吃风格：空间立体是近方角硬边，其余风格用各自的圆角。
+        // 只有大圆角才折算成卡片圆角，胶囊（半径 ≥ 40dp）必须保持原样，否则会被压成方块。
+        float radiusDp = radius / Math.max(1f, getResources().getDisplayMetrics().density);
+        d.setCornerRadius(radiusDp >= 16 && radiusDp < 40
+                ? dp(StyleMood.cardRadius(look.style(), radiusDp)) : radius);
         return d;
     }
 

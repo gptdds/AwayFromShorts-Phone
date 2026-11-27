@@ -17,7 +17,7 @@ public final class MemoToolButton extends TextView {
     public void setIconColor(int color){iconColor=color;invalidate();}
     @Override protected void onDraw(Canvas canvas){
         canvas.save();float size=ui.dp(iconDp);canvas.translate((getWidth()-size)/2,(getHeight()-size)/2);canvas.scale(size/28,size/28);
-        ink.setColor(iconColor==null?ui.accent():iconColor);ink.setStyle(Paint.Style.STROKE);ink.setStrokeWidth(ui.amap?1.25f:1.65f);ink.setStrokeCap(Paint.Cap.ROUND);ink.setStrokeJoin(Paint.Join.ROUND);
+        ink.setColor(iconColor==null?ui.accent():iconColor);ink.setStyle(Paint.Style.STROKE);ink.setStrokeWidth(ui.amap?1.15f:1.35f);ink.setStrokeCap(Paint.Cap.ROUND);ink.setStrokeJoin(Paint.Join.ROUND);
         String label=getText().toString();
         if(T.s("撤销").equals(label)||T.s("重做").equals(label)){if(T.s("重做").equals(label)){canvas.translate(28,0);canvas.scale(-1,1);}Path p=new Path();p.moveTo(5,11);p.cubicTo(18,3,26,12,22,22);canvas.drawPath(p,ink);line(canvas,5,11,5,4);line(canvas,5,11,12,11);}
         else if("Markdown".equals(label)){canvas.drawRoundRect(2,5,26,23,3,3,ink);line(canvas,6,19,6,10);line(canvas,6,10,10,15);line(canvas,10,15,14,10);line(canvas,14,10,14,19);line(canvas,21,10,21,19);line(canvas,18,16,21,19);line(canvas,21,19,24,16);}

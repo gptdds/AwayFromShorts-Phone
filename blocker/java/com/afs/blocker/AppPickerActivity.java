@@ -184,7 +184,12 @@ public class AppPickerActivity extends Activity {
                 out.add(e.pkg);
             }
         }
-        Store.setTargets(this, out);
+        try {
+            Store.setTargets(this, out);
+        } catch (IllegalStateException error) {
+            android.widget.Toast.makeText(this, error.getMessage(), android.widget.Toast.LENGTH_LONG).show();
+            return;
+        }
         Store.markConfigured(this);
         setResult(RESULT_OK, new Intent());
         finish();

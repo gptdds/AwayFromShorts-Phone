@@ -25,6 +25,14 @@ public final class Store {
 
     /** 用户没选过就返回默认的抖音三件套。 */
     public static Set<String> targets(Context c) {
+        try {
+            return new LinkedHashSet<>(Rules.all(c).keySet());
+        } catch (IllegalStateException error) {
+            return legacyTargets(c);
+        }
+    }
+
+    static Set<String> legacyTargets(Context c) {
         Set<String> s = sp(c).getStringSet(K_TARGETS, null);
         if (s == null || s.isEmpty()) {
             Set<String> d = new LinkedHashSet<>();
@@ -41,7 +49,7 @@ public final class Store {
     }
 
     public static void setTargets(Context c, Set<String> v) {
-        sp(c).edit().putStringSet(K_TARGETS, new HashSet<>(v)).apply();
+        Rules.setTargets(c, v);
     }
 
     public static int startMin(Context c) {
@@ -53,7 +61,7 @@ public final class Store {
     }
 
     public static void setWindow(Context c, int startMin, int endMin) {
-        sp(c).edit().putInt(K_START_MIN, startMin).putInt(K_END_MIN, endMin).apply();
+        Rules.setWindow(c,startMin,endMin);
     }
 
     /** 强制模式结束时刻（毫秒）。0 = 没开。 */
@@ -66,7 +74,10 @@ public final class Store {
     }
 
     public static void setForceUntil(Context c, long millis) {
-        sp(c).edit().putLong(K_FORCE_UNTIL, millis).apply();
+        if (forceActive(c) && millis < forceUntil(c)) throw new IllegalStateException("强制模式不可提前解除");
+        if (!sp(c).edit().putLong(K_FORCE_UNTIL, millis).commit())
+            throw new IllegalStateException("无法保存强制模式");
+        BlockerService.recheck();
     }
 
     /** 强制模式：从现在起 durationMs 内一律拦，且不可解除。 */

@@ -105,6 +105,7 @@ final class CheckinPenalty {
      * @return 这一次是否刚刚入账（调用方据此打日志 / 重算冻结）
      */
     static synchronized boolean tick(Context c) {
+        if (!MasterSwitch.enabled(c)) return false;
         Calendar now = GuardClock.now(c);
         if (!atDuePoint(now.get(Calendar.HOUR_OF_DAY))) return false;
         if (armed(c)) { backfill(c, now); return false; }
@@ -175,16 +176,29 @@ final class CheckinPenalty {
     /** 给学习联动摘要一行显示的短状态；没有待执行打卡罚时时返回空串。 */
     static String linkageStatus(Context c, Calendar now) {
         PenaltyStore.CheckinSummary s = PenaltyStore.checkinSummary(c, now.getTimeInMillis());
-        if (s.count == 0) return "";
-        String when = new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new Date(s.first));
-        String tail = new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new Date(s.last));
-        if (s.active > 0) {
+        return linkageStatusText(s.count, s.active, s.first, s.last, now.getTimeInMillis());
+    }
+
+    /** 纯文案：测试和界面共用一个相位，避免“已经生效”还显示“待接续”。 */
+    static String linkageStatusText(int count, int active, long first, long last, long now) {
+        if (count == 0) return "";
+        String when = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA).format(new Date(first));
+        String tail = new SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA).format(new Date(last));
+        if (active >= count) {
             return T.s("20:00 打卡罚时已生效：")
-                    + s.count + T.s(" 个应用分别延长 ")
-                    + (EXTEND_MS / 60000L) + T.s(" 分钟，最后一笔到 ") + tail;
+                    + count + T.s(" 个应用分别延长 ")
+                    + (EXTEND_MS / 60000L) + T.s(" 分钟，最后一笔到 ") + tail
+                    + T.s("，还剩 ") + FocusPlan.human(last - now);
+        }
+        if (active > 0) {
+            return T.s("20:00 打卡罚时部分已生效：")
+                    + active + T.s("/") + count + T.s(" 个应用正在延长，最后一笔到 ") + tail
+                    + T.s("；另有 ") + (count - active) + T.s(" 个应用从各自冻结结束点接续，最早 ")
+                    + when + T.s("，还有 ") + FocusPlan.human(first - now);
         }
         return T.s("20:00 打卡罚时已安排：")
-                + s.count + T.s(" 个应用从各自冻结结束点分别延长 ")
-                + (EXTEND_MS / 60000L) + T.s(" 分钟，最早 ") + when + T.s(" 接续");
+                + count + T.s(" 个应用从各自冻结结束点分别延长 ")
+                + (EXTEND_MS / 60000L) + T.s(" 分钟，最早 ") + when + T.s(" 接续")
+                + T.s("，还有 ") + FocusPlan.human(first - now);
     }
 }

@@ -28,6 +28,16 @@ import java.util.Calendar;
  */
 public class GuardService extends Service {
 
+    private static volatile boolean running;
+    private static volatile long lastTick;
+    private static volatile boolean recoveryRecorded;
+
+    static boolean healthy() {
+        return running && lastTick > 0L && android.os.SystemClock.elapsedRealtime() - lastTick < 120000L;
+    }
+
+    static long lastTickElapsed() { return lastTick; }
+
     private static final String CHANNEL = "afs_guard";
     private static final int NOTI_ID = 1001;
     private static final long TICK_MS = 30_000L;
@@ -39,6 +49,7 @@ public class GuardService extends Service {
     private String lastNoticeText;
     private final java.util.concurrent.ExecutorService quotaWorker=java.util.concurrent.Executors.newSingleThreadExecutor();
     private volatile boolean quotaBusy;
+    private volatile boolean stopped;
     /**
      * 额度节拍：亮屏 20 秒一问，灭屏 60 秒。
      *
@@ -47,12 +58,14 @@ public class GuardService extends Service {
      * 又不会像 5 秒那样从早到晚一直查。
      */
     private final Runnable quotaTick=new Runnable(){public void run(){
+        if(stopped)return;
+        ScreenUsageStore.collectLater(GuardService.this);
         if(!quotaBusy&&(DailyQuotaStore.active(GuardService.this)||!AppUsageQuota.limits(GuardService.this).isEmpty())){quotaBusy=true;quotaWorker.execute(()->{try{if(DailyQuotaStore.enforcementChanged(GuardService.this))Guard.apply(GuardService.this);}catch(Throwable error){Log.e(Guard.TAG,"daily quota tick failed",error);}finally{quotaBusy=false;}Guard.kickQuotaExceeded(GuardService.this);});}
         handler.postDelayed(this,interactive()?20000:60000);
     }};
 
-    /** 上一次从电脑那边看到的共享池状态，用来判断“刚超”还是“一直超”。 */
-    private volatile boolean lanExhausted;
+    /** 上一次从电脑那边看到的多池状态签名，用来判断“刚超”还是“一直超”。 */
+    private volatile String lanSignature = "";
     /**
      * 跨设备共享额度的上报节拍（3 秒）。
      *
@@ -61,17 +74,39 @@ public class GuardService extends Service {
      * 这里命中快照缓存，开销就是一次局域网往返。
      */
     private final Runnable lanTick=new Runnable(){public void run(){
+        if(stopped)return;
         if(LanQuota.active(GuardService.this)){
             quotaWorker.execute(()->{
                 try{
                     DailyQuotaData d=DailyQuotaStore.snapshot(GuardService.this);
-                    org.json.JSONObject group=d.groupById(LanQuota.group(GuardService.this));
-                    long used=group==null?0:d.used(group);
-                    // 连同明细一起报：电脑面板要照它列出「手机这一份」是哪些应用花的。
-                    org.json.JSONArray apps=LanQuota.appDetail(GuardService.this,d,group);
-                    LanQuota.pollAsync(GuardService.this,used,apps,()->{
-                        boolean now=LanQuota.exhausted(GuardService.this);
-                        if(now!=lanExhausted){lanExhausted=now;handler.post(()->Guard.apply(GuardService.this));}
+                    org.json.JSONArray bindings=LanQuota.bindings(GuardService.this);
+                    org.json.JSONArray reports=new org.json.JSONArray();
+                    for(int i=0;i<bindings.length();i++){
+                        org.json.JSONObject binding=bindings.optJSONObject(i);
+                        if(binding==null)continue;
+                        String groupId=binding.optString("group","");
+                        org.json.JSONObject group=d.groupById(groupId);
+                        long used=group==null?0:d.used(group);
+                        // 连同明细一起报：电脑面板要照它列出「手机这一份」是哪些应用花的。
+                        org.json.JSONArray apps=LanQuota.appDetail(GuardService.this,d,group);
+                        org.json.JSONObject report=new org.json.JSONObject();
+                        report.put("id",binding.optString("pool",""));
+                        report.put("group",groupId);
+                        report.put("usedSeconds",used/1000.0);
+                        if(apps.length()>0)report.put("apps",apps);
+                        reports.put(report);
+                    }
+                    if(reports.length()==0)return;
+                    LanQuota.pollAsync(GuardService.this,reports,()->{
+                        StringBuilder signature=new StringBuilder();
+                        for(int i=0;i<bindings.length();i++){
+                            org.json.JSONObject binding=bindings.optJSONObject(i);
+                            if(binding==null)continue;
+                            String groupId=binding.optString("group","");
+                            if(LanQuota.exhausted(GuardService.this,groupId))signature.append(groupId).append(';');
+                        }
+                        String now=signature.toString();
+                        if(!stopped&&!now.equals(lanSignature)){lanSignature=now;handler.post(()->{if(!stopped)Guard.apply(GuardService.this);});}
                     });
                 }catch(Throwable error){Log.w(Guard.TAG,"lan quota tick failed",error);}
             });
@@ -96,9 +131,11 @@ public class GuardService extends Service {
     private final Runnable lockTick = new Runnable() {
         @Override
         public void run() {
+            if(stopped)return;
             try {
                 LockEnforcer.tick(GuardService.this);
                 RestAlert.tick(GuardService.this);
+                Guard.remindOrFirstConflict(GuardService.this);
                 // 运维指令通道：files/afs-command.json 存在就执行一条，改完改名存档
                 OpsCommand.tick(GuardService.this);
             } catch (Throwable error) {
@@ -120,17 +157,26 @@ public class GuardService extends Service {
     private final Runnable tick = new Runnable() {
         @Override
         public void run() {
+            if(stopped)return;
             try {
                 // 低频心跳：诊断"进程活着但 tick 死了"这种事 —— 没有它永远查不出来
+                lastTick = android.os.SystemClock.elapsedRealtime();
                 if (tickCount % 10 == 0) {
                     Log.i(Guard.TAG, "tick alive #" + tickCount);
                 }
                 tickCount++;
+                // 每日亮屏上限：先采样再判定，到点由 Guard.apply 切系统灰度。
+                try { ScreenOnLimit.tick(GuardService.this); }
+                catch (RuntimeException error) { Log.w(Guard.TAG, "screen-on sample failed", error); }
                 Hub.kick(GuardService.this);
                 // 20:00 判断点：今天打卡没打完 → 各应用本次冻结再延 30 分钟（一天只入账一次）
                 CheckinPenalty.tick(GuardService.this);
                 // 备忘录提醒的兜底：闹钟被系统清掉时靠这里补排（内部 10 分钟节流）。
                 MemoReminder.rescheduleThrottled(GuardService.this);
+                // 待办定时同样靠守护节拍兜底重排；不参与冻结计算。
+                TodoReminder.rescheduleThrottled(GuardService.this);
+                // 冻结前 15 分钟的可选弹窗提醒（默认关）
+                try { FreezeWarn.tick(GuardService.this); } catch (RuntimeException ignored) { }
                 // apply 里要查使用记录（单次 186–538ms），绝不能占主线程：每 30 秒卡一下，
                 // 用户在任何页面滑动都会撞上。后台串行跑，合并重复请求。
                 Guard.applyAsync(GuardService.this);   // 内部只有状态变化时才调 setPackagesSuspended
@@ -148,7 +194,17 @@ public class GuardService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        if (!MasterSwitch.enabled(this)) {
+            stopped = true;
+            stopSelf();
+            return;
+        }
         startForeground(NOTI_ID, buildNotification());
+        running = true;
+        if (!recoveryRecorded) {
+            recoveryRecorded = true;
+            Phase3Telemetry.serviceRecovered(this);
+        }
         acquireWakeLock();
         handler.post(tick);
         handler.post(quotaTick);
@@ -159,6 +215,11 @@ public class GuardService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (!MasterSwitch.enabled(this)) {
+            stopped = true;
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         // 被系统杀掉后自动拉起；onCreate 里已经挂了 tick，这里只需保证不重复挂
         handler.removeCallbacks(tick);
         handler.post(tick);
@@ -172,8 +233,11 @@ public class GuardService extends Service {
 
     @Override
     public void onDestroy() {
+        stopped = true;
+        running = false;
         handler.removeCallbacks(tick);
         handler.removeCallbacks(lockTick);
+        handler.removeCallbacks(lanTick);
         handler.removeCallbacks(quotaTick);quotaWorker.shutdownNow();
         releaseWakeLock();
         Log.w(Guard.TAG, "service destroyed");
