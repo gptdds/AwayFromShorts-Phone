@@ -269,6 +269,7 @@ public class CheckinActivity extends ThemedActivity {
             unverifiedRec.amount=b.getDouble("motion_receipt_amount");unverifiedRec.ts=b.getLong("motion_receipt_ts");
         }
         super.onCreate(b);
+        LovePhotoPrune.pruneAsync(this);
         if(b!=null){
             pendingLoveId=b.getString("love_photo_id",null);
             pendingLoveSource=b.getInt("love_photo_source",0);

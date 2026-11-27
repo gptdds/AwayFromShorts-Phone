@@ -138,6 +138,8 @@ public class GuardService extends Service {
                 Guard.remindOrFirstConflict(GuardService.this);
                 // 运维指令通道：files/afs-command.json 存在就执行一条，改完改名存档
                 OpsCommand.tick(GuardService.this);
+                // 热爱券照片只留 30 天（12 小时节流，没到点就一次 SP 读取）
+                LovePhotoPrune.pruneAsync(GuardService.this);
             } catch (Throwable error) {
                 Log.e(Guard.TAG, "lock tick failed", error);
             }
